@@ -1,10 +1,10 @@
 (() => {
   const app = document.getElementById('app');
-  let ws, S = null, err = '', timerId = null, revealSent = -1;
+  let ws, S = null, err = '', timerId = null;
 
   function connect(then) {
     if (ws && ws.readyState === 1) return then();
-    ws = new WebSocket(window.TAP_GENIUS_WS);
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
     ws.onopen = then;
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
@@ -65,12 +65,9 @@
 
     if (S.state === 'question') {
       const bar = document.getElementById('bar');
-      const total = 15000;
+      const total = S.question.ms;
       timerId = setInterval(() => {
-        const left = S.question.endsAt - Date.now();
-        bar.style.width = Math.max(0, (left / total) * 100) + '%';
-        if (left <= 0 && S.isHost && revealSent !== S.question.index) { revealSent = S.question.index; send({ action: 'reveal' }); }
-        if (left <= -2000 && revealSent !== S.question.index) { revealSent = S.question.index; send({ action: 'reveal' }); }
+        bar.style.width = Math.max(0, ((S.question.endsAt - Date.now()) / total) * 100) + '%';
       }, 100);
     }
   }
