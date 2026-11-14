@@ -1,7 +1,5 @@
 # Deploying
-Pushing to `main` or a `claude/**` branch runs `.github/workflows/deploy.yml`, which deploys that exact commit to the EC2 game server through SSM using keyless GitHub OIDC.
+Pushing to `main` or a `claude/**` branch runs `.github/workflows/deploy.yml`, which deploys that exact commit to the shared EC2 instance (`i-00966cc1ee771d0cc`, us-west-1) through SSM using keyless GitHub OIDC (role `tap-genius-github-deploy`).
 
-## One-time AWS setup
-Run `deploy/bootstrap.sh` with admin credentials. It creates: SSM instance role/profile, a CloudFront-only security group, a t3.micro AL2023 instance with Node + a `game` systemd unit, an Elastic IP, a CloudFront distribution, and the `tap-genius-github-deploy` OIDC role (reusing the existing GitHub OIDC provider). It then writes the instance id into the workflow — commit that change.
-
-Note: game state is in memory, so deploys/restarts end any games in progress.
+Layout on the instance: girl_game = `game` service on :80; Tap Genius = `tap-genius` service on :8081. A separate security group (`tap-genius-web`) admits CloudFront only on 8081.
+`bootstrap.sh` documents the one-time AWS setup (already applied). Game state is in memory, so deploys/restarts end Tap Genius games in progress (girl_game is unaffected).

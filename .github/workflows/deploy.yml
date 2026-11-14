@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 env:
   AWS_REGION: us-west-1
-  INSTANCE_ID: i-REPLACE_ME   # printed by deploy/bootstrap.sh
+  INSTANCE_ID: i-00966cc1ee771d0cc   # shared with girl_game (Island Night)
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -35,13 +35,13 @@ jobs:
           curl -fsSL "https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${SHA}" -o src.tgz
           mkdir src && tar xzf src.tgz -C src --strip-components=1
           cd src
-          rm -rf /opt/game/public
-          cp -r server.js questions.json package.json package-lock.json public /opt/game/
-          cd /opt/game && (npm ci --omit=dev || npm install --omit=dev)
-          systemctl restart game
+          mkdir -p /opt/tap-genius; rm -rf /opt/tap-genius/public
+          cp -r server.js questions.json package.json package-lock.json public /opt/tap-genius/
+          cd /opt/tap-genius && (npm ci --omit=dev || npm install --omit=dev)
+          systemctl restart tap-genius
           sleep 3
-          systemctl is-active game
-          curl -fsS http://localhost/healthz >/dev/null
+          systemctl is-active tap-genius
+          curl -fsS http://localhost:8081/healthz >/dev/null
           echo "deployed ${SHA}"
           EOF
           sed -i 's/^          //' cmd.sh

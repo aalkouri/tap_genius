@@ -1,80 +1,44 @@
 #!/usr/bin/env bash
-# One-time AWS setup for Tap Genius, mirroring the girl_game / Island Night stack:
-#   EC2 (AL2023, Node, systemd) + Elastic IP + CloudFront (HTTPS/WebSockets) + SSM + GitHub-OIDC deploy role.
-# Needs admin AWS credentials. Idempotency is NOT guaranteed - run once, read the output.
+# Record of the one-time AWS setup for Tap Genius (tg.alkouri.com). It SHARES the girl_game EC2 instance:
+#   girl_game  -> :80   (systemd "game",        /opt/game)        -> CloudFront -> game.alkouri.com
+#   tap genius -> :8081 (systemd "tap-genius",  /opt/tap-genius)  -> CloudFront -> tg.alkouri.com
+# Needs admin AWS credentials. Already applied; kept for reproducibility. Steps 4-5 need DNS records at your DNS provider.
 set -euo pipefail
-R=us-west-1; N=tap-genius
+R=us-west-1; IID=i-00966cc1ee771d0cc; VPC=vpc-03351a3947a37dd12
 ACCT=$(aws sts get-caller-identity --query Account --output text)
-REPO_SUB='repo:aalkouri@40836919/tap_genius@1458175110'   # ID-based OIDC subject format
 
-# --- IAM: instance role (SSM only) ---
-aws iam create-role --role-name $N-ssm --assume-role-policy-document \
- '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}' >/dev/null
-aws iam attach-role-policy --role-name $N-ssm --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-aws iam create-instance-profile --instance-profile-name $N-ssm >/dev/null
-aws iam add-role-to-instance-profile --instance-profile-name $N-ssm --role-name $N-ssm
-sleep 10
-
-# --- Network: SG only reachable from CloudFront ---
-VPC=$(aws ec2 describe-vpcs --region $R --filters Name=is-default,Values=true --query 'Vpcs[0].VpcId' --output text)
-SG=$(aws ec2 create-security-group --region $R --group-name $N-web --description "Tap Genius web (CloudFront only)" --vpc-id "$VPC" --query GroupId --output text)
+# 1. Security group: 8081 from CloudFront only (separate SG - the island-night-web SG is at its rule limit)
+SG=$(aws ec2 create-security-group --region $R --group-name tap-genius-web --description "Tap Genius 8081 from CloudFront only" --vpc-id $VPC --query GroupId --output text)
 PL=$(aws ec2 describe-managed-prefix-lists --region $R --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing --query 'PrefixLists[0].PrefixListId' --output text)
-aws ec2 authorize-security-group-ingress --region $R --group-id "$SG" \
-  --ip-permissions "IpProtocol=tcp,FromPort=80,ToPort=80,PrefixListIds=[{PrefixListId=$PL,Description=CloudFront origin-facing}]" >/dev/null
+aws ec2 authorize-security-group-ingress --region $R --group-id "$SG" --ip-permissions "IpProtocol=tcp,FromPort=8081,ToPort=8081,PrefixListIds=[{PrefixListId=$PL}]"
+CUR=$(aws ec2 describe-instances --region $R --instance-ids $IID --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text)
+aws ec2 modify-instance-attribute --region $R --instance-id $IID --groups $CUR $SG
 
-# --- EC2 ---
-AMI=$(aws ssm get-parameter --region $R --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)
-cat > /tmp/tg-userdata.sh <<'UD'
-#!/bin/bash
-dnf install -y nodejs20 || dnf install -y nodejs
-mkdir -p /opt/game
-cat > /etc/systemd/system/game.service <<'U'
-[Unit]
-Description=Tap Genius
-After=network.target
-[Service]
-WorkingDirectory=/opt/game
-Environment=PORT=80
-ExecStart=/usr/bin/node server.js
-Restart=always
-[Install]
-WantedBy=multi-user.target
-U
-systemctl daemon-reload && systemctl enable game
-UD
-IID=$(aws ec2 run-instances --region $R --image-id "$AMI" --instance-type t3.micro \
-  --iam-instance-profile Name=$N-ssm --security-group-ids "$SG" --user-data file:///tmp/tg-userdata.sh \
-  --metadata-options HttpTokens=required \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$N}]" --query 'Instances[0].InstanceId' --output text)
-aws ec2 wait instance-running --region $R --instance-ids "$IID"
-ALLOC=$(aws ec2 allocate-address --region $R --domain vpc --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$N}]" --query AllocationId --output text)
-aws ec2 associate-address --region $R --instance-id "$IID" --allocation-id "$ALLOC" >/dev/null
-IP=$(aws ec2 describe-addresses --region $R --allocation-ids "$ALLOC" --query 'Addresses[0].PublicIp' --output text)
-ORIGIN="ec2-${IP//./-}.$R.compute.amazonaws.com"
+# 2. systemd service (run on the instance via SSM)
+aws ssm send-command --region $R --instance-ids $IID --document-name AWS-RunShellScript --parameters 'commands=[
+ "mkdir -p /opt/tap-genius",
+ "printf \"[Unit]\\nDescription=Tap Genius\\nAfter=network.target\\n[Service]\\nWorkingDirectory=/opt/tap-genius\\nEnvironment=PORT=8081\\nExecStart=/usr/bin/node server.js\\nRestart=always\\n[Install]\\nWantedBy=multi-user.target\\n\" > /etc/systemd/system/tap-genius.service",
+ "systemctl daemon-reload && systemctl enable tap-genius"]'
 
-# --- CloudFront: HTTPS + WebSockets, no caching ---
+# 3. OIDC deploy role "tap-genius-github-deploy": trust repo:aalkouri@40836919/tap_genius@1458175110 (main, claude/*),
+#    policy = ssm:SendCommand on this instance + AWS-RunShellScript, ssm:GetCommandInvocation/ListCommandInvocations.
+
+# 4. ACM cert (must be us-east-1 for CloudFront) -> add the printed validation CNAME at your DNS provider
+CERT=$(aws acm request-certificate --region us-east-1 --domain-name tg.alkouri.com --validation-method DNS --query CertificateArn --output text)
+aws acm describe-certificate --region us-east-1 --certificate-arn "$CERT" --query 'Certificate.DomainValidationOptions[0].ResourceRecord'
+aws acm wait certificate-validated --region us-east-1 --certificate-arn "$CERT"
+
+# 5. CloudFront: alias tg.alkouri.com, origin = instance DNS on port 8081, no caching, WebSockets work by default.
+IP=$(aws ec2 describe-instances --region $R --instance-ids $IID --query 'Reservations[0].Instances[0].PublicDnsName' --output text)
 cat > /tmp/tg-cf.json <<CF
-{"CallerReference":"$N-$(date +%s)","Comment":"$N","Enabled":true,"HttpVersion":"http2and3",
- "Origins":{"Quantity":1,"Items":[{"Id":"ec2","DomainName":"$ORIGIN",
-   "CustomOriginConfig":{"HTTPPort":80,"HTTPSPort":443,"OriginProtocolPolicy":"http-only","OriginReadTimeout":60}}]},
+{"CallerReference":"tap-genius-$(date +%s)","Comment":"tap genius","Enabled":true,"HttpVersion":"http2and3",
+ "Aliases":{"Quantity":1,"Items":["tg.alkouri.com"]},
+ "ViewerCertificate":{"ACMCertificateArn":"$CERT","SSLSupportMethod":"sni-only","MinimumProtocolVersion":"TLSv1.2_2021"},
+ "Origins":{"Quantity":1,"Items":[{"Id":"ec2","DomainName":"$IP",
+   "CustomOriginConfig":{"HTTPPort":8081,"HTTPSPort":443,"OriginProtocolPolicy":"http-only","OriginReadTimeout":60}}]},
  "DefaultCacheBehavior":{"TargetOriginId":"ec2","ViewerProtocolPolicy":"redirect-to-https",
    "AllowedMethods":{"Quantity":7,"Items":["GET","HEAD","OPTIONS","PUT","POST","PATCH","DELETE"]},
    "CachePolicyId":"4135ea2d-6df8-44a3-9df3-4b5a84be39ad","OriginRequestPolicyId":"b689b0a8-53d0-40ab-baf2-68738e2966ac","Compress":true}}
 CF
-CF_DOMAIN=$(aws cloudfront create-distribution --distribution-config file:///tmp/tg-cf.json --query Distribution.DomainName --output text)
-
-# --- GitHub OIDC deploy role (provider already exists from girl_game) ---
-aws iam create-role --role-name $N-github-deploy --assume-role-policy-document "{
- \"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",
- \"Principal\":{\"Federated\":\"arn:aws:iam::$ACCT:oidc-provider/token.actions.githubusercontent.com\"},
- \"Action\":\"sts:AssumeRoleWithWebIdentity\",
- \"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\"},
-  \"StringLike\":{\"token.actions.githubusercontent.com:sub\":[\"$REPO_SUB:ref:refs/heads/main\",\"$REPO_SUB:ref:refs/heads/claude/*\"]}}}]}" >/dev/null
-aws iam put-role-policy --role-name $N-github-deploy --policy-name deploy-via-ssm --policy-document "{
- \"Version\":\"2012-10-17\",\"Statement\":[
- {\"Effect\":\"Allow\",\"Action\":\"ssm:SendCommand\",\"Resource\":[\"arn:aws:ec2:$R:$ACCT:instance/$IID\",\"arn:aws:ssm:$R::document/AWS-RunShellScript\"]},
- {\"Effect\":\"Allow\",\"Action\":[\"ssm:GetCommandInvocation\",\"ssm:ListCommandInvocations\"],\"Resource\":\"*\"}]}"
-
-sed -i "s/i-REPLACE_ME/$IID/" "$(dirname "$0")/../.github/workflows/deploy.yml"
-echo "Instance: $IID  EIP: $IP  Site: https://$CF_DOMAIN (CloudFront takes ~5 min to deploy)"
-echo "Now commit the updated workflow and push to main / claude/* to deploy the app."
+aws cloudfront create-distribution --distribution-config file:///tmp/tg-cf.json --query Distribution.DomainName --output text
+# Then add CNAME: tg.alkouri.com -> <that cloudfront domain>
