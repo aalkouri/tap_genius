@@ -47,9 +47,22 @@ def main():
                 k2 = (q["q"], json.dumps(q.get("v"), sort_keys=True))
                 if k2 in seen2: continue
                 seen2.add(k2); uniq.append(q)
-            if len(uniq) < N:
-                raise SystemExit(f"{cid} [{band}]: only {len(uniq)} distinct questions, need {N}")
-            r = rng_for("order", cid, band); r.shuffle(uniq); uniq = uniq[:N]
+            # optional hand-placed questions (tools/qgen/extras/<cid>.py) are ALWAYS kept; the generated pool fills the rest
+            extras = []
+            try:
+                ex = importlib.import_module(f"qgen.extras.{cid}")
+            except ModuleNotFoundError as e:
+                if e.name != f"qgen.extras.{cid}": raise
+                ex = None
+            if ex:
+                kx = lambda q: (q["q"], json.dumps(q.get("v"), sort_keys=True))
+                extras = list({kx(q): q for q in ex.build(band)}.values())
+                uniq = [q for q in uniq if kx(q) not in {kx(e) for e in extras}]
+            if len(uniq) + len(extras) < N:
+                raise SystemExit(f"{cid} [{band}]: only {len(uniq) + len(extras)} distinct questions, need {N}")
+            r = rng_for("order", cid, band); r.shuffle(uniq)
+            uniq = uniq[:N - len(extras)] + extras
+            r.shuffle(uniq)
             for i, q in enumerate(uniq):
                 validate(q, f"{cid}[{band}]#{i}")
                 q["id"] = f"{cid}-{band}-{i:03d}"
