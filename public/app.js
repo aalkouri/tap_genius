@@ -1,6 +1,6 @@
 (() => {
   const app = document.getElementById('app');
-  let ws, S = null, err = '', timerId = null;
+  let ws, S = null, err = '', timerId = null, standKey = null, anim = null;
 
   function connect(then) {
     if (ws && ws.readyState === 1) return then();
@@ -8,17 +8,86 @@
     ws.onopen = then;
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
-      if (m.type === 'error') { err = m.message; } else { S = m; err = ''; }
+      if (m.type === 'error') { err = m.message; Sfx.play('wrong'); } else { const prev = S; S = m; err = ''; sounds(prev, S); }
       render();
     };
     ws.onclose = () => { err = 'Disconnected. Reload to rejoin.'; render(); };
+  }
+  // sound effects for state changes (the standings screen plays its own while animating)
+  function sounds(prev, cur) {
+    const key = (x) => x.state + ':' + (x.question ? x.question.index : x.round ? x.round.index : '');
+    if (!prev || key(prev) !== key(cur)) {
+      if (cur.state === 'question') Sfx.play(prev && prev.state === 'lobby' ? 'start' : 'question');
+      else if (cur.state === 'reveal') Sfx.play(cur.myChoice !== null && cur.myChoice === cur.correct ? 'correct' : 'wrong');
+      else if (cur.state === 'done') Sfx.play(cur.players[0] && cur.players[0].name === cur.you.name && cur.players[0].score > 0 ? 'win' : 'done');
+    } else if (cur.state === 'lobby' && prev.players.length < cur.players.length) Sfx.play('join');
   }
   const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   const board = (players) => `<ol>${players.map((p) => `<li>${esc(p.name)}<span>${p.score}</span></li>`).join('')}</ol>`;
 
+  function stopAnim() { if (anim) { anim.stop(); anim = null; } }
+
+  // Between-round screen: rows start in last round's order with last round's scores, the scores count up,
+  // then rows glide to their new positions; rank numbers flip up (moved up) or down (moved down).
+  function renderStandings() {
+    const ROW = 60, rows = S.standings;
+    app.innerHTML = `<h1>⚡ Tap Genius</h1>
+      <div class="muted">Round ${S.round.index + 1} / ${S.round.total}</div>
+      <h2 class="st-title">${S.isLast ? '🏁 Final standings' : '📊 Standings'}</h2>
+      <div class="board" style="height:${rows.length * ROW}px">${rows.map((r) => `
+        <div class="srow ${r.you ? 'me' : ''}" data-name="${esc(r.name)}" style="transform:translateY(${r.from * ROW}px)">
+          <div class="rk"><span class="rkn">${r.from + 1}</span></div>
+          <div class="nm">${esc(r.name)}${r.you ? ' <small>(you)</small>' : ''}</div>
+          <div class="pts"><span class="sc">${r.prev}</span>${r.gained > 0 ? `<span class="gain">+${r.gained}</span>` : ''}</div>
+        </div>`).join('')}</div>
+      ${S.isHost ? `<button id="next">${S.isLast ? 'Final results' : 'Continue'}</button>` : '<p class="muted">Next round starting soon…</p>'}`;
+    const next = document.getElementById('next'); if (next) next.onclick = () => send({ action: 'next' });
+
+    const els = [...app.querySelectorAll('.srow')], timers = []; let raf = 0, stopped = false;
+    const at = (ms, fn) => timers.push(setTimeout(() => { if (!stopped) fn(); }, ms));
+    const COUNT_AT = 800, COUNT_MS = 2200;
+    // 1) count every score up from its previous value
+    at(COUNT_AT, () => {
+      els.forEach((el) => { const g = el.querySelector('.gain'); if (g) g.classList.add('go'); });
+      const t0 = performance.now(); let lastStep = -1;
+      const step = (now) => {
+        if (stopped) return;
+        const p = Math.min(1, (now - t0) / COUNT_MS), e = 1 - Math.pow(1 - p, 3);
+        els.forEach((el, i) => { const r = rows[i]; el.querySelector('.sc').textContent = Math.round(r.prev + (r.score - r.prev) * e); });
+        const st = Math.floor(p * 24); if (st !== lastStep && p < 1 && rows.some((r) => r.gained > 0)) { lastStep = st; Sfx.play('count', p); }
+        if (p < 1) raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    });
+    // 2) glide to the new order; flip the rank text up or down
+    at(COUNT_AT + COUNT_MS + 500, () => {
+      let up = false, down = false;
+      els.forEach((el, i) => {
+        const r = rows[i], rk = el.querySelector('.rkn');
+        el.style.transform = `translateY(${r.to * ROW}px)`;
+        if (r.to === r.from) return;
+        const dir = r.to < r.from ? 'up' : 'down'; (dir === 'up' ? (up = true) : (down = true));
+        el.classList.add('moved-' + dir); el.style.zIndex = dir === 'up' ? 3 : 1;
+        rk.classList.remove('flip-up', 'flip-down'); void rk.offsetWidth;
+        rk.textContent = r.to + 1; rk.classList.add('flip-' + dir);
+        const a = document.createElement('span'); a.className = 'arrow ' + dir; a.textContent = dir === 'up' ? '▲' : '▼'; el.querySelector('.rk').appendChild(a);
+      });
+      if (up) Sfx.play('up'); if (down) setTimeout(() => Sfx.play('down'), up ? 140 : 0);
+      if (!up && !down) Sfx.play('whoosh');
+      els.forEach((el, i) => { if (rows[i].to === 0) el.classList.add('leader'); });
+    });
+    anim = { stop() { stopped = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout); } };
+  }
+
   function render() {
     clearInterval(timerId);
+    if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)
+      const key = S.code + ':' + S.round.index;
+      if (key === standKey) return;
+      standKey = key; stopAnim(); return renderStandings();
+    }
+    standKey = null; stopAnim();
     let h = '<h1>⚡ Tap Genius</h1>';
     if (!S) {
       h += `<div class="card">
@@ -67,7 +136,7 @@
         }).join('')}</div>`;
       if (rev) {
         h += `<div class="card"><b>${S.gained > 0 ? `+${S.gained} points!` : 'No points this round'}</b>${board(S.players)}</div>
-          ${S.isHost ? '<button id="next">Next</button>' : '<p class="muted">Waiting for host…</p>'}`;
+          ${S.isHost ? '<button id="next">Standings ▶</button>' : '<p class="muted">Waiting for host…</p>'}`;
       } else {
         h += `<p class="muted">${S.myChoice !== null ? 'Locked in! Waiting for others…' : 'Tap your answer!'} (${S.players.filter((p) => p.answered).length}/${S.players.length} answered)</p>`;
       }
@@ -94,10 +163,19 @@
     if (S.state === 'question') {
       const bar = document.getElementById('bar');
       const total = S.question.ms;
+      let lastTick = -1;
       timerId = setInterval(() => {
-        bar.style.width = Math.max(0, ((S.question.endsAt - Date.now()) / total) * 100) + '%';
+        const left = S.question.endsAt - Date.now();
+        bar.style.width = Math.max(0, (left / total) * 100) + '%';
+        const sec = Math.ceil(left / 1000);
+        if (S.myChoice === null && sec <= 5 && sec > 0 && sec !== lastTick) { lastTick = sec; Sfx.play('tick'); }   // last-5-seconds countdown
       }, 100);
     }
   }
+  const mute = document.getElementById('mute');
+  const paintMute = () => (mute.textContent = Sfx.muted ? '🔇' : '🔊');
+  mute.onclick = () => { Sfx.toggle(); paintMute(); };
+  paintMute();
+  document.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && b !== mute && !b.disabled) Sfx.play('tap'); });
   render();
 })();

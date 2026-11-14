@@ -34,3 +34,23 @@ ol { padding-left:24px; } li { padding:4px 0; } li span { float:right; font-weig
 .choice.pic:nth-child(3){border-color:#d89e00} .choice.pic:nth-child(4){border-color:#26890c}
 .choice.pic svg, .choice.pic img { width:80px; height:80px; object-fit:contain; } .choice.pic .emo { font-size:64px; line-height:1; }
 .choice.pic.picked { outline-color:#555; }
+
+#mute { position:fixed; top:10px; right:10px; width:44px; height:44px; padding:0; margin:0; border-radius:50%; background:#4a3f8f; color:#fff; font-size:1.3rem; z-index:10; }
+.st-title { text-align:center; margin:4px 0 14px; }
+.board { position:relative; margin-bottom:16px; }
+.srow { position:absolute; left:0; right:0; height:54px; display:flex; align-items:center; gap:12px; padding:0 14px; background:var(--card); border-radius:14px;
+  transition:transform .9s cubic-bezier(.3,1.2,.4,1), background .4s, box-shadow .4s; }
+.srow.me { outline:2px solid var(--accent); }
+.srow.leader { background:#5b4a00; box-shadow:0 0 18px #ffb70388; }
+.srow.moved-up { background:#164d2b; } .srow.moved-down { background:#4d1b1b; }
+.srow.leader.moved-up { background:#5b4a00; }
+.rk { position:relative; width:42px; height:36px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:1.25rem; perspective:200px; overflow:visible; }
+.rkn { display:inline-block; }
+.rkn.flip-up { animation:flipUp .7s cubic-bezier(.2,.9,.3,1.2); } .rkn.flip-down { animation:flipDown .7s cubic-bezier(.2,.9,.3,1.2); }
+@keyframes flipUp   { 0% { transform:translateY(120%) rotateX(-95deg); opacity:0; } 100% { transform:none; opacity:1; } }
+@keyframes flipDown { 0% { transform:translateY(-120%) rotateX(95deg); opacity:0; } 100% { transform:none; opacity:1; } }
+.arrow { position:absolute; right:-6px; top:-6px; font-size:.8rem; animation:pop .5s; } .arrow.up { color:#2ecc71; } .arrow.down { color:#ff6b6b; }
+@keyframes pop { 0% { transform:scale(0); } 70% { transform:scale(1.4); } 100% { transform:scale(1); } }
+.nm { flex:1; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .nm small { opacity:.6; font-weight:400; }
+.pts { position:relative; min-width:64px; display:flex; justify-content:flex-end; font-weight:800; font-variant-numeric:tabular-nums; }
+.gain { position:absolute; right:100%; margin-right:10px; top:50%; margin-top:-.7em; white-space:nowrap; color:#7dffa6; font-size:.85rem; font-weight:700; transition:opacity .5s, transform .5s; } .gain.go { opacity:0; transform:translateY(-8px); }

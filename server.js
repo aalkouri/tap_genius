@@ -9,6 +9,7 @@ const BANDS = ['2-5', '6-10', '11+'];
 const BAND_LABEL = { '2-5': 'Ages 2–5', '6-10': 'Ages 6–10', '11+': 'Ages 11+' };
 const QUESTION_MS = { '2-5': 30000, '6-10': 20000, '11+': 20000 }; // little ones get more time
 const ROUNDS = 10, MAX_PLAYERS = 50, ROOM_IDLE_MS = 2 * 3600e3;
+const STANDINGS_MS = 9000;   // standings screen between rounds (host can skip)
 
 // ---------- question bank: questions/<category>.json (built by tools/build_questions.py) ----------
 // Questions whose picture is a file under public/img/ are skipped when that file is missing (e.g. Disney art not added yet).
@@ -74,6 +75,11 @@ function view(room, p) {
   const v = { type: 'state', state: room.state, code: room.code, isHost: p === room.host, players, you: { name: p.name, score: p.score } };
   v.config = { band: room.band, cats: room.cats };
   if (room.state === 'lobby') v.catalog = { bands: BANDS.map((id) => ({ id, label: BAND_LABEL[id] })), cats: CATS };
+  if (room.state === 'standings') {
+    v.standings = room.snap.map((r) => ({ ...r, you: r.name === p.name }));
+    v.round = { index: room.qIndex, total: room.order.length };
+    v.isLast = room.isLast;
+  }
   if (room.state === 'question' || room.state === 'reveal') {
     const q = BYID.get(room.order[room.qIndex]);
     v.question = { index: room.qIndex, total: room.order.length, text: q.q, choices: q.c, endsAt: room.endsAt, ms: room.ms, visual: q.v || null, ct: q.ct || 'text', band: room.band };
@@ -95,6 +101,7 @@ function reveal(room) {
   clearTimeout(room.timer); room.state = 'reveal';
   const correct = BYID.get(room.order[room.qIndex]).a;
   room.players.forEach((p) => {
+    p.prev = p.score;
     if (p.choice === correct) {
       const frac = Math.min(1, (p.answeredAt - room.startedAt) / room.ms);
       p.gained = 500 + Math.round(500 * (1 - frac)); // 500-1000, faster = more
@@ -102,6 +109,24 @@ function reveal(room) {
     }
   });
   broadcast(room);
+}
+// Between rounds: everyone sees who is winning. Ranks before/after let clients animate the movement.
+function enterStandings(room) {
+  clearTimeout(room.timer);
+  const rank = (key) => new Map([...room.players].sort((a, b) => b[key] - a[key]).map((p, i) => [p, i]));  // stable: ties keep join order
+  const from = rank('prev'), to = rank('score');
+  room.snap = room.players.map((p) => ({ name: p.name, prev: p.prev, score: p.score, gained: p.gained, from: from.get(p), to: to.get(p) }))
+    .sort((a, b) => a.from - b.from);
+  room.isLast = room.qIndex + 1 >= room.order.length;
+  room.state = 'standings';
+  room.timer = setTimeout(() => advance(room), STANDINGS_MS);
+  broadcast(room);
+}
+function advance(room) {
+  if (room.state !== 'standings') return;
+  clearTimeout(room.timer);
+  if (room.isLast) { room.state = 'done'; return broadcast(room); }
+  room.qIndex++; startQuestion(room);
 }
 function removePlayer(ws) {
   const room = ws.room; if (!room) return;
@@ -118,7 +143,7 @@ const ACTIONS = {
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
     const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'] };
-    const p = { ws, name, score: 0, choice: null, gained: 0 };
+    const p = { ws, name, score: 0, prev: 0, choice: null, gained: 0 };
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room);
     broadcast(room);
   },
@@ -130,7 +155,7 @@ const ACTIONS = {
     if (room.state !== 'lobby') return err(ws, 'Game already started');
     if (room.players.length >= MAX_PLAYERS) return err(ws, 'Room is full');
     if (room.players.some((x) => x.name.toLowerCase() === name.toLowerCase())) return err(ws, 'Name already taken');
-    const p = { ws, name, score: 0, choice: null, gained: 0 };
+    const p = { ws, name, score: 0, prev: 0, choice: null, gained: 0 };
     room.players.push(p); ws.room = room; ws.player = p; broadcast(room);
   },
   config(ws, m) {  // host picks the age range and which categories to play
@@ -153,14 +178,14 @@ const ACTIONS = {
     p.choice = m.choice; p.answeredAt = Date.now();
     if (room.players.every((x) => x.choice !== null)) reveal(room); else broadcast(room);
   },
-  next(ws) {
-    const room = hostRoom(ws); if (!room || room.state !== 'reveal') return;
-    if (++room.qIndex >= room.order.length) { room.state = 'done'; return broadcast(room); }
-    startQuestion(room);
+  next(ws) {   // reveal -> standings -> (auto after STANDINGS_MS, or host skips) -> next question / final scores
+    const room = hostRoom(ws); if (!room) return;
+    if (room.state === 'reveal') return enterStandings(room);
+    if (room.state === 'standings') return advance(room);
   },
   again(ws) {
     const room = hostRoom(ws); if (!room || room.state !== 'done') return;
-    room.state = 'lobby'; room.qIndex = -1; room.players.forEach((p) => { p.score = 0; p.choice = null; p.gained = 0; });
+    room.state = 'lobby'; room.qIndex = -1; room.players.forEach((p) => { p.score = 0; p.prev = 0; p.choice = null; p.gained = 0; });
     broadcast(room);
   },
 };
