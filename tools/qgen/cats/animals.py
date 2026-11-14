@@ -498,7 +498,8 @@ def build(band):
         for table, phr, d, want, ratio in ((MASS_EM, "biggest", "max", 40, 2.0), (MASS_EM, "smallest", "min", 40, 2.0),
                                            (SPEED_EM, "fastest", "max", 30, 1.5), (SPEED_EM, "slowest", "min", 30, 1.5)):
             for s in lineups(r, table, want, ratio, d):
-                add(mc(r, f"Which animal is the {phr}?", s[0], s[1:], v=emoji(" ".join(E(x) for x in r.sample(s, 4)))))
+                qq = f"Which animal moves the {phr}?" if phr in ("fastest", "slowest") else f"Which animal is the {phr}?"
+                add(mc(r, qq, s[0], s[1:], v=emoji(" ".join(E(x) for x in r.sample(s, 4)))))
         for g, a, w in GROUP_NAMES:
             add(mc(r, f"A group of {g} is called a ...", a, w))
         for q, a, w in FACT6:
