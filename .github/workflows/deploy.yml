@@ -27,12 +27,14 @@ jobs:
           role-to-assume: arn:aws:iam::405433667541:role/tap-genius-github-deploy
           aws-region: ${{ env.AWS_REGION }}
       - name: Deploy over SSM
+        env:
+          GH_TOKEN: ${{ github.token }}   # short-lived, read-only; lets the instance fetch this private repo
         run: |
           SHA="${GITHUB_SHA}"
           cat > cmd.sh <<EOF
           set -euo pipefail
           W=\$(mktemp -d); cd "\$W"
-          curl -fsSL "https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${SHA}" -o src.tgz
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/${GITHUB_REPOSITORY}/tarball/${SHA}" -o src.tgz
           mkdir src && tar xzf src.tgz -C src --strip-components=1
           cd src
           mkdir -p /opt/tap-genius; rm -rf /opt/tap-genius/public
