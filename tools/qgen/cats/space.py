@@ -268,11 +268,17 @@ def late():
              ("Miranda", "Uranus"), ("Titania", "Uranus"), ("Oberon", "Uranus"), ("Triton", "Neptune")]
     for m, p in moons:
         out.append(mc(r, f"Which planet does the moon {m} orbit?", p, [x for x in PLANETS if x != p]))
-    for q, a in [("Which moon is the largest in the solar system?", "Ganymede"), ("Which moon of Jupiter is the most volcanically active place known?", "Io"),
-                 ("Which moon of Jupiter likely hides an ocean beneath an icy shell?", "Europa"),
-                 ("Which moon of Saturn has a thick nitrogen atmosphere?", "Titan"), ("Which moon of Saturn shoots geysers of ice from its south pole?", "Enceladus"),
-                 ("Which large moon of Neptune orbits backwards (retrograde)?", "Triton"), ("What is the largest moon of Pluto called?", "Charon")]:
-        out.append(mc(r, q, a, ["Io", "Europa", "Ganymede", "Callisto", "Titan", "Enceladus", "Triton", "Charon", "Phobos", "Rhea"]))
+    NJ = ["Titan", "Triton", "Charon", "Phobos", "Rhea", "Enceladus"]
+    NS = ["Io", "Triton", "Charon", "Phobos", "Europa", "Ganymede"]
+    NN = ["Io", "Titan", "Charon", "Phobos", "Europa", "Rhea"]
+    for q, a, pool in [("Which moon is the largest in the solar system?", "Ganymede", ["Io", "Europa", "Callisto", "Titan", "Triton", "Charon"]),
+                       ("Which moon of Jupiter is the most volcanically active place known?", "Io", NJ),
+                       ("Which moon of Jupiter likely hides an ocean beneath an icy shell and is a top target for life searches?", "Europa", NJ),
+                       ("Which moon of Saturn has a thick nitrogen atmosphere?", "Titan", ["Enceladus", "Mimas", "Rhea", "Iapetus"]),
+                       ("Which moon of Saturn shoots geysers of ice from its south pole?", "Enceladus", ["Titan", "Mimas", "Rhea", "Iapetus"]),
+                       ("Which large moon of Neptune orbits backwards (retrograde)?", "Triton", NN),
+                       ("What is the largest moon of Pluto called?", "Charon", ["Io", "Europa", "Titan", "Triton", "Phobos"])]:
+        out.append(mc(r, q, a, pool))
     out += [mc(r, "Which of these is NOT one of Jupiter's four Galilean moons?", "Titan", ["Io", "Europa", "Ganymede", "Callisto"]),
             mc(r, "How many moons does Mars have?", "2", ["0", "1", "3", "4"]),
             mc(r, "How many moons does Mercury have?", "0", ["1", "2", "3", "4"]),

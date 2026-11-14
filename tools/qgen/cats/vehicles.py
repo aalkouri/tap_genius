@@ -177,7 +177,7 @@ LOGOS = [("Which car brand's logo is a prancing horse?", "Ferrari", "Ford|Toyota
          ("Which car brand's logo is a charging bull?", "Lamborghini", "Ferrari|Ford|Audi|Honda"),
          ("Which car brand's logo is a three-pointed star in a circle?", "Mercedes-Benz", "Audi|Toyota|Ford|Volvo"),
          ("Which car brand's logo is four linked rings?", "Audi", "Mercedes-Benz|Toyota|Ford|Honda"),
-         ("Which car brand's logo is a blue oval?", "Ford", "Audi|Mercedes-Benz|Toyota|Ferrari"),
+         ("Which car brand's logo is a blue oval?", "Ford", "Audi|Mercedes-Benz|Ferrari|Volvo"),
          ("Which car brand's logo is a lion standing on its legs?", "Peugeot", "Ferrari|Ford|Audi|Honda"),
          ("Which car brand's logo is a gold bowtie?", "Chevrolet", "Ford|Audi|Mercedes-Benz|Honda"),
          ("Which car company makes the Model S, Model 3 and Model Y?", "Tesla", "Ford|Toyota|Honda|Volvo"),

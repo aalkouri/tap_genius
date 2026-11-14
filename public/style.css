@@ -27,7 +27,7 @@ ol { padding-left:24px; } li { padding:4px 0; } li span { float:right; font-weig
 .chip.on { background:var(--accent); color:#111; } .chip.small { font-size:.85rem; padding:6px 10px; background:#3a3175; }
 .chip:disabled { opacity:.3; }
 .qv { display:flex; justify-content:center; margin-top:8px; }
-.qv svg, .qv img { width:150px; height:150px; object-fit:contain; } .qv .emo { font-size:110px; line-height:1.1; }
+.qv svg { width:150px; height:150px; } .qv img { width:230px; height:230px; object-fit:contain; } .qv .emo { font-size:110px; line-height:1.1; }
 .say { width:auto; display:inline; padding:2px 10px; margin:0 0 0 6px; font-size:1.1rem; background:#4a3f8f; }
 .choice.pic { background:#fff; border:6px solid; display:flex; align-items:center; justify-content:center; min-height:110px; }
 .choice.pic:nth-child(1){border-color:#e21b3c} .choice.pic:nth-child(2){border-color:#1368ce}
