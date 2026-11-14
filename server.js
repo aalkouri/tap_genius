@@ -117,7 +117,7 @@ const ACTIONS = {
     const name = cleanName(m.name); if (!name) return err(ws, 'Enter a name');
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
-    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: CATS.map((c) => c.id), ms: QUESTION_MS['6-10'] };
+    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'] };
     const p = { ws, name, score: 0, choice: null, gained: 0 };
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room);
     broadcast(room);

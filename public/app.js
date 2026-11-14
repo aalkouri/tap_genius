@@ -51,7 +51,7 @@
       h += `<div class="card"><div class="muted">Room code</div><div class="code">${S.code}</div></div>
         ${picker}
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
-        ${S.isHost ? `<button id="start" ${cfg.cats.length ? '' : 'disabled'}>Start game</button>` : '<p class="muted">Waiting for host to start…</p>'}`;
+        ${S.isHost ? `<button id="start" ${cfg.cats.length ? '' : 'disabled'}>Start game</button>${cfg.cats.length ? '' : '<p class="muted">Pick at least one category to start</p>'}` : '<p class="muted">Waiting for host to start…</p>'}`;
     } else if (S.state === 'question' || S.state === 'reveal') {
       const q = S.question, rev = S.state === 'reveal';
       const vis = (kind, val) => kind === 'emoji' ? `<span class="emo">${esc(val)}</span>`
