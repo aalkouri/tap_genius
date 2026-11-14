@@ -34,17 +34,36 @@
       return;
     }
     if (S.state === 'lobby') {
+      const cfg = S.config, cat = S.catalog;
+      const band = cat.bands.find((b) => b.id === cfg.band);
+      const count = (c) => c.counts[cfg.band];
+      let picker;
+      if (S.isHost) {
+        picker = `<div class="card"><b>Age range</b>
+          <div class="chips">${cat.bands.map((b) => `<button class="chip ${b.id === cfg.band ? 'on' : ''}" data-band="${b.id}">${esc(b.label)}</button>`).join('')}</div>
+          <b>Categories</b> <span class="muted">(${cfg.cats.length} picked)</span>
+          <div class="chips">${cat.cats.map((c) => `<button class="chip ${cfg.cats.includes(c.id) ? 'on' : ''}" data-cat="${c.id}" ${count(c) ? '' : 'disabled'}>${c.icon} ${esc(c.name)}</button>`).join('')}</div>
+          <div class="chips"><button class="chip small" id="allcats">Select all</button><button class="chip small" id="nocats">Clear</button></div></div>`;
+      } else {
+        const picked = cat.cats.filter((c) => cfg.cats.includes(c.id));
+        picker = `<div class="card"><b>${esc(band.label)}</b><div class="muted">${picked.length ? picked.map((c) => `${c.icon} ${esc(c.name)}`).join(' · ') : 'Host is picking categories…'}</div></div>`;
+      }
       h += `<div class="card"><div class="muted">Room code</div><div class="code">${S.code}</div></div>
+        ${picker}
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
-        ${S.isHost ? '<button id="start">Start game</button>' : '<p class="muted">Waiting for host to start…</p>'}`;
+        ${S.isHost ? `<button id="start" ${cfg.cats.length ? '' : 'disabled'}>Start game</button>` : '<p class="muted">Waiting for host to start…</p>'}`;
     } else if (S.state === 'question' || S.state === 'reveal') {
       const q = S.question, rev = S.state === 'reveal';
+      const vis = (kind, val) => kind === 'emoji' ? `<span class="emo">${esc(val)}</span>`
+        : kind === 'svg' ? val : `<img src="/img/${esc(val)}" alt="">`;
+      const visual = q.visual ? `<div class="qv">${vis(q.visual.t, q.visual.v)}</div>` : '';
+      const pics = q.ct !== 'text';
       h += `<div class="muted">Question ${q.index + 1} / ${q.total}</div>
         <div class="timer"><div id="bar"></div></div>
-        <div class="card"><h2>${esc(q.text)}</h2></div>
+        <div class="card"><h2>${esc(q.text)} ${q.band === '2-5' ? '<button class="say" id="say" title="Read aloud">🔊</button>' : ''}</h2>${visual}</div>
         <div class="choices">${q.choices.map((c, i) => {
-          const cls = ['choice', S.myChoice === i ? 'picked' : '', rev && S.correct === i ? 'right' : '', rev && S.correct !== i ? 'dim' : ''].join(' ');
-          return `<button class="${cls}" data-i="${i}" ${rev || S.myChoice !== null ? 'disabled' : ''}>${esc(c)}</button>`;
+          const cls = ['choice', pics ? 'pic' : '', S.myChoice === i ? 'picked' : '', rev && S.correct === i ? 'right' : '', rev && S.correct !== i ? 'dim' : ''].join(' ');
+          return `<button class="${cls}" data-i="${i}" ${rev || S.myChoice !== null ? 'disabled' : ''}>${pics ? vis(q.ct, c) : esc(c)}</button>`;
         }).join('')}</div>`;
       if (rev) {
         h += `<div class="card"><b>${S.gained > 0 ? `+${S.gained} points!` : 'No points this round'}</b>${board(S.players)}</div>
@@ -62,6 +81,15 @@
     document.querySelectorAll('.choice').forEach((b) => (b.onclick = () => send({ action: 'answer', choice: +b.dataset.i })));
     const on = (id, a) => { const el = document.getElementById(id); if (el) el.onclick = () => send({ action: a }); };
     on('start', 'start'); on('next', 'next'); on('again', 'again');
+    document.querySelectorAll('[data-band]').forEach((b) => (b.onclick = () => send({ action: 'config', band: b.dataset.band, cats: S.config.cats })));
+    document.querySelectorAll('[data-cat]').forEach((b) => (b.onclick = () => {
+      const set = new Set(S.config.cats); set.has(b.dataset.cat) ? set.delete(b.dataset.cat) : set.add(b.dataset.cat);
+      send({ action: 'config', cats: [...set] });
+    }));
+    const allc = document.getElementById('allcats'); if (allc) allc.onclick = () => send({ action: 'config', cats: S.catalog.cats.filter((c) => c.counts[S.config.band]).map((c) => c.id) });
+    const noc = document.getElementById('nocats'); if (noc) noc.onclick = () => send({ action: 'config', cats: [] });
+    const say = document.getElementById('say');
+    if (say) say.onclick = () => { try { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(S.question.text)); } catch (e) { } };
 
     if (S.state === 'question') {
       const bar = document.getElementById('bar');

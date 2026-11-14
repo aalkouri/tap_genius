@@ -38,7 +38,7 @@ jobs:
           mkdir src && tar xzf src.tgz -C src --strip-components=1
           cd src
           mkdir -p /opt/tap-genius; rm -rf /opt/tap-genius/public
-          cp -r server.js questions.json package.json package-lock.json public /opt/tap-genius/
+          rm -rf /opt/tap-genius/questions; cp -r server.js questions package.json package-lock.json public /opt/tap-genius/
           cd /opt/tap-genius && (npm ci --omit=dev || npm install --omit=dev)
           systemctl restart tap-genius
           sleep 3
