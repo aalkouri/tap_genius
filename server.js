@@ -73,7 +73,7 @@ const MINI = {
   rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs. Wait for the bridges!', ms: 70000 },
 };
 const WORDS = JSON.parse(fs.readFileSync(path.join(__dirname, 'words.json'), 'utf8'));   // things that are fun to draw
-const MINI_ROUNDS = 3, COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
+const COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
 const MISS_LOCK_MS = 1000, MISS_GRACE_MS = 500;   // empty-square penalty: 1s lockout; only squares with no mole for 0.5s count as empty
 const HOLE_REST_MS = 1500;   // after a mole leaves a hole (whacked or not), that hole stays empty this long
 const GRACE_MS = +process.env.GRACE_MS || 3 * 60 * 1000;   // a player whose connection drops (phone locked, app switched) keeps their seat this long
@@ -128,7 +128,7 @@ function view(room, p) {
   v.mode = room.mode; v.host = room.host.name;
   v.config = { band: room.band, cats: room.cats };
   if (room.state === 'lobby') {
-    if (room.mode === 'mini') v.mini = { games: Object.values(MINI).map(({ id, name, icon, min }) => ({ id, name, icon, min: min || 1 })), rounds: MINI_ROUNDS };
+    if (room.mode === 'mini') v.mini = { games: Object.values(MINI).map(({ id, name, icon, min }) => ({ id, name, icon, min: min || 1 })), selected: room.miniGames, rounds: room.miniRounds };      // rounds 0 = each picked game once
     else v.catalog = { bands: BANDS.map((id) => ({ id, label: BAND_LABEL[id] })), cats: CATS };
   }
   if (room.state === 'countdown' || room.state === 'play') {
@@ -212,7 +212,10 @@ function startMini(room) {             // every mini game opens with the same 3-
   clearTimeout(room.timer); clearTimeout(room.spawnTimer);
   room.state = 'countdown';
   room.players.forEach((p, i) => { p.prev = p.score; p.gained = 0; p.idx = i; });
-  if ((MINI[room.order[room.qIndex]].min || 1) > room.players.length) room.order[room.qIndex] = 'whack';   // not enough players left for this game
+  if ((MINI[room.order[room.qIndex]].min || 1) > here(room).length) {                    // not enough players left for this game: use another game the host picked
+    const alt = room.miniGames.filter((id) => (MINI[id].min || 1) <= here(room).length);
+    room.order[room.qIndex] = alt.length ? alt[Math.floor(Math.random() * alt.length)] : 'whack';
+  }
   const gid = room.order[room.qIndex];
   miniCleanup(room); room.bomb = null; room.copy = null;
   room.rc = gid === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
@@ -237,6 +240,16 @@ function playMini(room) {
   else if (g.id === 'bomb') bombInit(room);
   else if (g.id === 'copy') copyInit(room);
   room.timer = setTimeout(() => endMini(room), g.ms);
+}
+// The order of mini games for a series: `n` rounds drawn from `ids`, every game once per lap (shuffled), never the same game twice in a row.
+function buildMiniOrder(ids, n) {
+  const order = [];
+  while (order.length < n) {
+    const lap = shuffle([...ids]);
+    if (order.length && lap.length > 1 && lap[0] === order[order.length - 1]) lap.push(lap.shift());
+    order.push(...lap);
+  }
+  return order.slice(0, n);
 }
 // Points for a finishing order: best place first, ties share the better place's points.
 function awardPlaces(groups) {
@@ -535,7 +548,7 @@ const ACTIONS = {
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
     const av = saveAvatar(m.avatar); if (!av) return err(ws, 'Take your picture first');
-    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av] };
+    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], miniGames: [], miniRounds: 0, ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av] };
     const p = { ws, name, av, room, score: 0, prev: 0, choice: null, gained: 0, token: crypto.randomBytes(12).toString('hex') };
     TOKENS.set(p.token, p);
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room); browsers.delete(ws);
@@ -588,14 +601,18 @@ const ACTIONS = {
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
     if (BANDS.includes(m.band)) room.band = m.band;
     if (Array.isArray(m.cats)) room.cats = CATS.map((c) => c.id).filter((id) => m.cats.includes(id));
+    if (Array.isArray(m.games)) room.miniGames = Object.keys(MINI).filter((id) => m.games.includes(id));       // Mini Games: which games to play (one is enough)
+    if ([0, 1, 3, 5].includes(m.rounds)) room.miniRounds = m.rounds;                                            // ... and how many rounds
     broadcast(room);
   },
   start(ws) {
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
     if (room.mode === 'mini') {
-      // FORCE_MINI=<id> is for automated tests only (always play that game); normal play shuffles the eligible games
-      const ids = process.env.FORCE_MINI && MINI[process.env.FORCE_MINI] ? [process.env.FORCE_MINI] : shuffle(Object.keys(MINI).filter((id) => (MINI[id].min || 1) <= room.players.length));
-      room.order = Array.from({ length: MINI_ROUNDS }, (_, i) => ids[i % ids.length]);
+      // FORCE_MINI=<id> is for automated tests only (always plays that game)
+      const forced = process.env.FORCE_MINI && MINI[process.env.FORCE_MINI] ? process.env.FORCE_MINI : null;
+      const eligible = forced ? [forced] : room.miniGames.filter((id) => MINI[id] && (MINI[id].min || 1) <= here(room).length);
+      if (!eligible.length) return err(ws, room.miniGames.length ? 'Not enough players for the games you picked' : 'Pick at least one game');
+      room.order = buildMiniOrder(eligible, room.miniRounds || (forced ? 3 : eligible.length));
       room.qIndex = 0; return startMini(room);
     }
     room.ms = QUESTION_MS[room.band];

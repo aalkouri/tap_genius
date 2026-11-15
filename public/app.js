@@ -892,11 +892,25 @@
       ? `<div class="chips modes">${[['trivia', '🧠 Trivia'], ['mini', '🎮 Mini Games']].map(([m, l]) => `<button class="chip ${S.mode === m ? 'on' : ''}" data-setmode="${m}">${l}</button>`).join('')}</div>`
       : `<div class="muted">${S.mode === 'mini' ? '🎮 Mini Games' : '🧠 Trivia'}</div>`}</div>`;
     if (S.state === 'lobby' && S.mode === 'mini') {
-      h += `${lobbyHead()}
-        <div class="card"><b>🎮 Mini Games</b> <span class="muted">(${S.mini.rounds} rounds)</span>
-          <div class="chips">${S.mini.games.map((g) => { const need = g.min > S.players.length; return `<span class="chip static ${need ? '' : 'on'}">${g.icon} ${esc(g.name)}${g.min > 1 ? ` <small>(${g.min}+ players)</small>` : ''}</span>`; }).join('')}</div></div>
+      const m = S.mini, sel = new Set(m.selected), here = S.players.filter((x) => !x.away).length;
+      const usable = m.games.filter((g) => sel.has(g.id) && g.min <= here);
+      const n = m.rounds || usable.length;
+      const ROUNDS = [[0, 'Each once'], [1, '1'], [3, '3'], [5, '5']];
+      let pick;
+      if (S.isHost) {
+        pick = `<div class="card"><b>🎮 Games to play</b> <span class="muted">(${sel.size} picked)</span>
+          <div class="chips">${m.games.map((g) => { const lock = g.min > here; return `<button class="chip ${sel.has(g.id) ? 'on' : ''}" data-game="${g.id}" ${lock && !sel.has(g.id) ? 'disabled' : ''}>${g.icon} ${esc(g.name)}${g.min > 1 ? ` <small>(${g.min}+ players)</small>` : ''}</button>`; }).join('')}</div>
+          <b>Rounds</b>
+          <div class="chips">${ROUNDS.map(([v, l]) => `<button class="chip ${m.rounds === v ? 'on' : ''}" data-rounds="${v}">${l}</button>`).join('')}</div>
+          <div class="chips"><button class="chip small" id="allgames">Select all</button><button class="chip small" id="nogames">Clear</button></div></div>`;
+      } else {
+        const picked = m.games.filter((g) => sel.has(g.id));
+        pick = `<div class="card"><b>🎮 Mini Games</b> <span class="muted">${m.rounds ? `· ${m.rounds} round${m.rounds > 1 ? 's' : ''}` : '· each game once'}</span>
+          <div class="muted" style="margin-top:6px">${picked.length ? picked.map((g) => `${g.icon} ${esc(g.name)}`).join(' · ') : 'Host is picking games…'}</div></div>`;
+      }
+      h += `${lobbyHead()}${pick}
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
-        ${S.isHost ? '<button id="start">Start game</button>' : '<p class="muted">Waiting for host to start…</p>'}`;
+        ${S.isHost ? `<button id="start" ${usable.length ? '' : 'disabled'}>Start game${usable.length ? ` · ${n} round${n > 1 ? 's' : ''}` : ''}</button>${usable.length ? '' : `<p class="muted">${sel.size ? 'Not enough players for the games you picked' : 'Pick at least one game to start'}</p>`}` : '<p class="muted">Waiting for host to start…</p>'}`;
     } else if (S.state === 'lobby') {
       const cfg = S.config, cat = S.catalog;
       const band = cat.bands.find((b) => b.id === cfg.band);
@@ -944,6 +958,13 @@
     const on = (id, a) => { const el = document.getElementById(id); if (el) el.onclick = () => send({ action: a }); };
     on('start', 'start'); on('next', 'next'); on('again', 'again'); on('leave', 'leave');
     document.querySelectorAll('[data-setmode]').forEach((b) => (b.onclick = () => { if (b.dataset.setmode !== S.mode) send({ action: 'mode', mode: b.dataset.setmode }); }));
+    document.querySelectorAll('[data-game]').forEach((b) => (b.onclick = () => {
+      const set = new Set(S.mini.selected); set.has(b.dataset.game) ? set.delete(b.dataset.game) : set.add(b.dataset.game);
+      send({ action: 'config', games: [...set] });
+    }));
+    document.querySelectorAll('[data-rounds]').forEach((b) => (b.onclick = () => send({ action: 'config', rounds: +b.dataset.rounds })));
+    const allg = document.getElementById('allgames'); if (allg) allg.onclick = () => send({ action: 'config', games: S.mini.games.filter((g) => g.min <= S.players.filter((x) => !x.away).length).map((g) => g.id) });
+    const nog = document.getElementById('nogames'); if (nog) nog.onclick = () => send({ action: 'config', games: [] });
     document.querySelectorAll('[data-band]').forEach((b) => (b.onclick = () => send({ action: 'config', band: b.dataset.band, cats: S.config.cats })));
     document.querySelectorAll('[data-cat]').forEach((b) => (b.onclick = () => {
       const set = new Set(S.config.cats); set.has(b.dataset.cat) ? set.delete(b.dataset.cat) : set.add(b.dataset.cat);
