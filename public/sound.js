@@ -73,6 +73,7 @@ window.Sfx = (() => {
     pad:      (i = 0) => tone([392, 330, 494, 262][i] || 392, 0, 0.34, 'triangle', 0.26),          // Copy Cat: each coloured pad has its own note
     pie:      (v = 1) => { tone(900, 0, 0.2, 'sine', 0.16 * v, 260); noise(0, 0.12, 0.1 * v, 2500); },        // Pie Fight: a pie leaves the hand
     splat:    (v = 1) => { noise(0, 0.22, 0.35 * v, 600); tone(180, 0, 0.18, 'sine', 0.25 * v, 60); },     // ... and lands (wall or face)
+    shot:     () => { noise(0, 0.1, 0.3, 2800); tone(1100, 0, 0.16, 'sawtooth', 0.2, 110); },                  // Number Sniper: a shot
     step:     () => tone(150, 0, 0.05, 'triangle', 0.09, 90),                             // footsteps in the podium cutscene
     land:     () => tone(260, 0, 0.1, 'sine', 0.16, 120),
     shutter:  () => { noise(0, 0.07, 0.2, 3000); noise(0.09, 0.05, 0.14, 2200); },         // camera click

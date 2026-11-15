@@ -300,6 +300,112 @@
     anim = { stop() { timers.forEach(clearTimeout); ivs.forEach(clearInterval); try { speechSynthesis.cancel(); } catch (e) { } } };
   }
 
+  // ---- Number Sniper: read the number over a player when they stop, type it to eliminate them ----
+  function renderNs() {
+    const g = S.mini, me = S.you.name, cars = g.cars, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
+    app.innerHTML = `<div class="timer"><div id="bar"></div></div>
+      <div class="hud rchud"><span id="nsme">You: 0</span><span id="nsleft"></span></div>
+      <canvas id="nsv"></canvas>
+      <div class="nsfeed" id="nsfeed"></div>
+      <div class="nsin"><div class="nsboxes" id="nsboxes">${'<span class="nb"></span>'.repeat(4)}</div><div class="nsmsg" id="nsmsg">Type a number to snipe</div></div>
+      <div class="keypad" id="keypad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => `<button data-k="${d}">${d}</button>`).join('')}<button data-k="back" class="kb">⌫</button><button data-k="0">0</button><button data-k="clr" class="kb">✕</button></div>`;
+    const cv = document.getElementById('nsv'), ctx = cv.getContext('2d'), bar = document.getElementById('bar'), feed = document.getElementById('feed') || document.getElementById('nsfeed');
+    const now0 = performance.now(), imgs = {}, st = new Map(), skulls = [], sparks = [], floats = [], score = {}, dead = new Set(g.dead || []);
+    cars.forEach((c) => { score[c.i] = 0; st.set(c.i, { ...c, x: -999, y: -999, tx: 0, ty: 0, mv: 0, bl: 0, num: -1, seen: false, flash: -1e9 }); if (c.av) { const im = new Image(); im.src = `/avatar/${c.av}.jpg`; imgs[c.i] = im; } });
+    const idxName = (i) => (cars.find((c) => c.i === i) || {}).name || '?';
+    let W = 0, dpr = 1, raf = 0, floor = null, entered = '', lockUntil = 0, outMe = dead.has(myId);
+    const size = () => {
+      dpr = Math.min(2, window.devicePixelRatio || 1); W = Math.max(250, Math.min(app.clientWidth, 560, window.innerHeight - 440));
+      cv.style.width = W + 'px'; cv.style.height = W + 'px'; cv.width = Math.round(W * dpr); cv.height = Math.round(W * dpr);
+      floor = document.createElement('canvas'); floor.width = cv.width; floor.height = cv.height; const f = floor.getContext('2d'); f.scale(dpr, dpr);
+      f.fillStyle = '#2d4a3e'; f.fillRect(0, 0, W, W); f.strokeStyle = 'rgba(255,255,255,.07)'; f.lineWidth = 1;
+      for (let k = 1; k < 10; k++) { f.beginPath(); f.moveTo(k * W / 10, 0); f.lineTo(k * W / 10, W); f.moveTo(0, k * W / 10); f.lineTo(W, k * W / 10); f.stroke(); }
+      f.strokeStyle = 'rgba(255,255,255,.13)'; f.lineWidth = 2; f.beginPath(); f.arc(W / 2, W / 2, W * 0.16, 0, 7); f.stroke();
+      f.lineWidth = 6; f.strokeStyle = '#6b4a2b'; f.strokeRect(1.5, 1.5, W - 3, W - 3);
+      f.font = `900 ${W * 0.1}px system-ui,sans-serif`; f.fillStyle = 'rgba(255,255,255,.06)'; f.textAlign = 'center'; f.fillText('NUMBER SNIPER', W / 2, W / 2 + W * 0.035);
+    };
+    size(); window.addEventListener('resize', size);
+    const sx = (x) => x / 1000 * W, fmt4 = (n) => String(n).padStart(4, '0');
+    const smear = (txt, x, y, now, big) => {                                      // a number that cannot be read: a real blur where the browser supports it, a heavy haze where it does not
+      if ('filter' in ctx) { ctx.save(); ctx.filter = `blur(${Math.max(4, big * 0.3)}px)`; ctx.fillStyle = 'rgba(225,235,255,.9)'; ctx.fillText(txt, x, y); ctx.restore(); return; }
+      ctx.fillStyle = 'rgba(225,235,255,.1)';
+      for (let k = 0; k < 14; k++) { const a = k * 0.9 + now / 120, r = big * (0.1 + 0.12 * ((k % 3) / 2)); ctx.fillText(txt, x + Math.cos(a) * r, y + Math.sin(a) * r); }
+    };
+    const drawPlayer = (c, now) => {
+      const x = sx(c.x), y = sx(c.y), hw = W * 0.105, hh = hw * 1.28, mineC = c.i === myId, flashing = now - c.flash < 1000;
+      const bob = c.mv ? Math.sin(now / 90 + c.i) * 1.6 : 0;
+      ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(x, y + hh * 0.5, hw * 0.45, hh * 0.12, 0, 0, 7); ctx.fill();
+      ctx.save(); ctx.beginPath(); ctx.ellipse(x, y + bob, hw / 2, hh / 2, 0, 0, 7); ctx.clip();
+      const im = imgs[c.i]; if (im && im.complete && im.naturalWidth) ctx.drawImage(im, x - hw / 2, y - hh / 2 + bob, hw, hh); else { ctx.fillStyle = '#c89a6b'; ctx.fillRect(x - hw / 2, y - hh / 2, hw, hh); }
+      if (flashing) { ctx.fillStyle = `rgba(255,255,255,${0.55 * (1 - (now - c.flash) / 1000)})`; ctx.fillRect(x - hw, y - hh, hw * 2, hh * 2); }
+      ctx.restore();
+      ctx.lineWidth = mineC ? 3 : 2; ctx.strokeStyle = mineC ? '#ffd35a' : 'rgba(255,255,255,.85)'; ctx.beginPath(); ctx.ellipse(x, y + bob, hw / 2, hh / 2, 0, 0, 7); ctx.stroke();
+      // the number plate: readable only while the server says so
+      const fs = Math.max(11, W * 0.05), ty = y - hh / 2 - fs * 0.95; ctx.font = `800 ${fs}px ui-monospace,Menlo,Consolas,monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tw = ctx.measureText('0000').width + fs * 0.7, readable = c.num >= 0;
+      ctx.fillStyle = readable ? 'rgba(10,20,40,.88)' : 'rgba(10,20,40,.7)'; ctx.beginPath(); ctx.roundRect(x - tw / 2, ty - fs * 0.62, tw, fs * 1.24, fs * 0.3); ctx.fill();
+      ctx.strokeStyle = readable ? '#7dffa6' : c.bl ? '#ff9a9a' : 'rgba(255,255,255,.3)'; ctx.lineWidth = readable ? 2 : 1; ctx.stroke();
+      if (readable) { ctx.fillStyle = '#7dffa6'; ctx.fillText(fmt4(c.num), x, ty + 1); }
+      else { const fake = String(Math.floor(now / 70 + c.i * 37) % 10000).padStart(4, '0'); smear(fake, x, ty + 1, now, fs); if (c.bl) { ctx.fillStyle = 'rgba(255,120,120,.9)'; ctx.font = `900 ${fs * 0.7}px system-ui`; ctx.fillText('💫', x + tw / 2 - fs * 0.2, ty - fs * 0.5); } }
+      ctx.font = `800 ${Math.max(9, W * 0.027)}px system-ui,sans-serif`; const lbl = mineC ? 'YOU' : c.name.slice(0, 9), lw = ctx.measureText(lbl).width;
+      ctx.fillStyle = mineC ? '#ffd35a' : 'rgba(0,0,0,.55)'; ctx.beginPath(); ctx.roundRect(x - lw / 2 - 5, y + hh / 2 + 3, lw + 10, 15, 7); ctx.fill(); ctx.fillStyle = mineC ? '#3a2400' : '#fff'; ctx.fillText(lbl, x, y + hh / 2 + 11);
+    };
+
+    // ---- the number pad: the 4th digit fires
+    const boxes = [...document.querySelectorAll('.nb')], msg = document.getElementById('nsmsg'), pad = document.getElementById('keypad');
+    const paintIn = () => boxes.forEach((b, k) => { b.textContent = entered[k] || ''; b.classList.toggle('on', k === entered.length); });
+    const say = (t, cls = '') => { msg.textContent = t; msg.className = 'nsmsg ' + cls; };
+    const padOn = () => { const ok = !outMe && performance.now() >= lockUntil; pad.classList.toggle('off', !ok); };
+    const press = (k) => {
+      if (outMe || performance.now() < lockUntil) return;
+      if (k === 'back') entered = entered.slice(0, -1); else if (k === 'clr') entered = ''; else if (entered.length < 4) entered += k;
+      paintIn();
+      if (entered.length === 4) { send({ action: 'nsfire', num: entered }); setTimeout(() => { entered = ''; paintIn(); }, 180); }
+    };
+    pad.addEventListener('pointerdown', (e) => { const b = e.target.closest('button'); if (!b) return; e.preventDefault(); b.classList.add('held'); setTimeout(() => b.classList.remove('held'), 90); press(b.dataset.k); });
+    pad.addEventListener('contextmenu', (e) => e.preventDefault());
+    const kd = (e) => { if (/^[0-9]$/.test(e.key)) press(e.key); else if (e.key === 'Backspace') press('back'); else if (e.key === 'Escape') press('clr'); };
+    document.addEventListener('keydown', kd);
+    const addFeed = (html, cls = '') => { const d = document.createElement('div'); d.className = 'fl ' + cls; d.innerHTML = html; feed.appendChild(d); while (feed.children.length > 3) feed.firstChild.remove(); };
+    const hud = () => { document.getElementById('nsme').textContent = `You: ${score[myId] || 0}`; document.getElementById('nsleft').textContent = `${cars.length - dead.size} left`; };
+    (g.log || []).forEach((e) => addFeed(e.self ? `<b>${esc(e.victim)}</b> eliminated themselves` : `<b>${esc(e.by)}</b> 🎯 <b>${esc(e.victim)}</b>`));
+    paintIn(); padOn(); hud(); if (outMe) say("You're out — watch!", 'bad');
+
+    const frame = (now) => {
+      raf = requestAnimationFrame(frame);
+      st.forEach((c) => { if (c.seen) { c.x += (c.tx - c.x) * 0.45; c.y += (c.ty - c.y) * 0.45; } });
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(floor, 0, 0, W, W);
+      const order = [...st.values()].filter((c) => c.seen && !dead.has(c.i)).sort((a, b) => a.y - b.y); order.forEach((c) => drawPlayer(c, now));
+      for (let k = skulls.length - 1; k >= 0; k--) { const s = skulls[k], a = (now - s.t0) / 2400; if (a >= 1) { skulls.splice(k, 1); continue; } ctx.globalAlpha = 1 - a; ctx.font = `${W * 0.085}px system-ui`; ctx.textAlign = 'center'; ctx.fillText(s.self ? '🤦' : '💀', sx(s.x), sx(s.y) - a * 14); ctx.globalAlpha = 1; }
+      for (let k = sparks.length - 1; k >= 0; k--) { const s = sparks[k], a = (now - s.t0) / 700; if (a >= 1) { sparks.splice(k, 1); continue; } ctx.globalAlpha = 1 - a; ctx.font = `${W * (0.06 + a * 0.05)}px system-ui`; ctx.textAlign = 'center'; ctx.fillText('💥', sx(s.x), sx(s.y)); ctx.globalAlpha = 1; }
+      for (let k = floats.length - 1; k >= 0; k--) { const f = floats[k], a = (now - f.t0) / 1100; if (a >= 1) { floats.splice(k, 1); continue; } ctx.globalAlpha = 1 - a; ctx.font = `900 ${W * 0.07}px system-ui`; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#06331a'; ctx.strokeText(f.text, sx(f.x), sx(f.y) - a * 36); ctx.fillStyle = f.color; ctx.fillText(f.text, sx(f.x), sx(f.y) - a * 36); ctx.globalAlpha = 1; }
+      bar.style.width = Math.max(0, 100 - ((now - now0) / g.ms) * 100) + '%'; padOn();
+    };
+    raf = requestAnimationFrame(frame);
+
+    live = {
+      onEvent(ev) {
+        const now = performance.now();
+        if (ev.ev === 'ns') { ev.c.forEach(([i, x, y, fl, num]) => { const c = st.get(i); if (!c) return; if (!c.seen) { c.x = x; c.y = y; c.seen = true; } c.tx = x; c.ty = y; c.mv = fl & 1; c.bl = fl & 2; c.num = num; }); }
+        else if (ev.ev === 'nscol') { Sfx.play('thunk'); [ev.a, ev.b].forEach((i) => { const c = st.get(i); if (c) c.flash = now; }); sparks.push({ x: ev.x, y: ev.y, t0: now }); }
+        else if (ev.ev === 'nsout') {
+          const v = st.get(ev.i); dead.add(ev.i); skulls.push({ x: v ? v.tx : 500, y: v ? v.ty : 500, t0: now, self: ev.self }); Sfx.play('shot');
+          if (!ev.self) score[ev.by] = ev.pts; hud();
+          addFeed(ev.self ? `<b>${esc(idxName(ev.i))}</b> eliminated themselves 🤦` : `<b>${esc(idxName(ev.by))}</b> 🎯 <b>${esc(idxName(ev.i))}</b>`, ev.by === myId || ev.i === myId ? 'me' : '');
+          if (ev.i === myId) {                                                         // I am out: the big red X, the buzzer, and who did it
+            outMe = true; entered = ''; paintIn(); setTimeout(() => Sfx.play('buzzer'), 120);
+            bigX(ev.self ? 'You eliminated yourself' : `${idxName(ev.by)} eliminated you`); say("You're out — watch!", 'bad');
+          } else if (ev.by === myId && !ev.self) { Sfx.play('correct'); say(`🎯 You eliminated ${idxName(ev.i)}! +1`, 'ok'); if (v) floats.push({ x: v.tx, y: v.ty, text: '+1', color: '#7dffa6', t0: now }); }
+          else Sfx.play('pop');
+        } else if (ev.ev === 'nsmiss') {
+          lockUntil = performance.now() + ev.ms; entered = ''; paintIn(); say('No player has that number', 'bad'); Sfx.play('wrong');
+          app.classList.remove('shake'); void app.offsetWidth; app.classList.add('shake'); setTimeout(() => { if (!outMe) say('Type a number to snipe'); }, ev.ms);
+        }
+      },
+      stop() { cancelAnimationFrame(raf); window.removeEventListener('resize', size); document.removeEventListener('keydown', kd); },
+    };
+  }
+
   // ---- Pie Fight: everyone rides the edge of a square arena; throw pies across it at faces ----
   function renderPf() {
     const g = S.mini, me = S.you.name, cars = g.cars, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
@@ -873,6 +979,15 @@
     };
   }
 
+  // Number Sniper's end screen: every elimination in order, and who scored the most
+  function nsLogCard() {
+    const fmt = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+    const rows = S.standings.map((r) => ({ name: r.name, pts: r.gained })), top = Math.max(0, ...rows.map((r) => r.pts)), tops = rows.filter((r) => r.pts === top && top > 0);
+    return `<div class="card nslog"><b>🎯 Who eliminated who</b>
+      ${S.nsLog.length ? `<ol>${S.nsLog.map((e) => `<li><span class="nt">${fmt(e.at)}</span> ${e.self ? `<b>${esc(e.victim)}</b> eliminated themselves 🤦` : `<b>${esc(e.by)}</b> <span class="nx">🎯</span> <b>${esc(e.victim)}</b> <span class="np">+1</span>`}</li>`).join('')}</ol>` : '<p class="muted">Nobody was eliminated.</p>'}
+      <div class="nstop">${tops.length ? `🏆 Most points: <b>${tops.map((t) => esc(t.name)).join(' & ')}</b> (${top})` : 'No points this round'}</div></div>`;
+  }
+
   function stopAnim() { if (anim) { anim.stop(); anim = null; } }
 
   // Between-round screen: rows start in last round's order with last round's scores, the scores count up,
@@ -882,6 +997,7 @@
     app.innerHTML = `${brand}
       <div class="muted">Round ${S.round.index + 1} / ${S.round.total}</div>
       <h2 class="st-title">${S.isLast ? '🏁 Final standings' : '📊 Standings'}</h2>
+      ${S.nsLog ? nsLogCard() : ''}
       ${S.reveal ? `<div class="card reveal"><div class="muted">The word was</div><div class="revword">${esc(S.reveal.toUpperCase())}</div>${window.__lastDrawing ? `<img src="${window.__lastDrawing}" alt="">` : ''}</div>` : ''}
       <div class="board" style="height:${rows.length * ROW}px">${rows.map((r) => `
         <div class="srow ${r.you ? 'me' : ''}" data-name="${esc(r.name)}" style="transform:translateY(${r.from * ROW}px)">
@@ -954,7 +1070,7 @@
       const key = S.state + ':' + S.code + ':' + S.mini.index;
       if (key === liveKey) return;
       liveKey = key; stopLive(); stopAnim(); standKey = null;
-      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : S.mini.game === 'bomb' ? renderBomb() : S.mini.game === 'copy' ? renderCopy() : S.mini.game === 'pf' ? renderPf() : renderPlay();
+      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : S.mini.game === 'bomb' ? renderBomb() : S.mini.game === 'copy' ? renderCopy() : S.mini.game === 'pf' ? renderPf() : S.mini.game === 'ns' ? renderNs() : renderPlay();
     }
     liveKey = null; stopLive();
     if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)

@@ -303,3 +303,19 @@ button.small { padding:9px; font-size:.85rem; }
 .pfb.throw::after { content:''; position:absolute; left:0; right:0; bottom:0; height:var(--cd, 0%); background:rgba(40,20,0,.5); pointer-events:none; }
 .pfb.throw.cool { filter:saturate(.7); }
 .pfb.held { transform:translateY(5px); box-shadow:0 1px 0 #0003; filter:brightness(1.12); }
+
+/* ---- Number Sniper ---- */
+#nsv { display:block; margin:6px auto 0; border-radius:14px; box-shadow:0 5px 0 rgba(2,18,56,.55); touch-action:none; }
+.nsfeed { min-height:52px; margin:4px 2px 2px; font-size:.88rem; display:flex; flex-direction:column; justify-content:flex-end; }
+.nsfeed .fl { padding:1px 0; opacity:.9; } .nsfeed .fl.me { color:var(--yellow); font-weight:700; opacity:1; }
+.nsin { display:flex; align-items:center; gap:12px; margin:2px 0 8px; }
+.nsboxes { display:flex; gap:6px; } .nb { width:42px; height:50px; border-radius:10px; background:#0a1c3c; border:2px solid rgba(110,200,255,.35); display:flex; align-items:center; justify-content:center; font:800 1.7rem ui-monospace,Menlo,monospace; color:#7dffa6; }
+.nb.on { border-color:var(--yellow); box-shadow:0 0 10px rgba(255,211,90,.5); }
+.nsmsg { flex:1; font-weight:700; font-size:.92rem; line-height:1.2; opacity:.9; } .nsmsg.bad { color:#ff9a9a; } .nsmsg.ok { color:#7dffa6; }
+.keypad { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; max-width:340px; margin:0 auto; touch-action:manipulation; transition:opacity .15s; }
+.keypad button { margin:0; height:52px; font-size:1.5rem; background:linear-gradient(180deg,#3b8cf0,#1a5bc4); color:#fff; box-shadow:0 4px 0 #0c3a85; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.keypad button.kb { background:linear-gradient(180deg,#5a6b8c,#3d4c6b); box-shadow:0 4px 0 #26324a; }
+.keypad button.held { transform:translateY(3px); box-shadow:0 1px 0 #0003; }
+.keypad.off { opacity:.4; pointer-events:none; }
+.nslog ol { padding-left:0; list-style:none; margin:8px 0; } .nslog li { padding:3px 0; font-size:.95rem; } .nslog .nt { opacity:.6; font-variant-numeric:tabular-nums; margin-right:6px; }
+.nslog .np { color:#7dffa6; font-weight:800; } .nslog .nstop { margin-top:8px; padding:8px; border-radius:12px; background:rgba(255,211,90,.14); text-align:center; }

@@ -67,6 +67,7 @@ function closeRoom(room) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
+  ns:    { id: 'ns', name: 'Number Sniper', icon: '🎯', how: 'Read the number over a player when they stop moving, then type it to eliminate them. Never type your own!', ms: 75000, min: 2 },
   pf:    { id: 'pf', name: 'Pie Fight', icon: '🥧', how: 'Run around the edge, then throw pies at faces across the arena. Hit = +1, get hit = -1!', ms: 50000, min: 2 },
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
   copy:  { id: 'copy', name: 'Copy Cat', icon: '🎵', how: 'Watch the pattern, then tap it back. The fastest to finish each round scores the most. One mistake and you are out!', ms: 80000, min: 1 },
@@ -140,6 +141,10 @@ function view(room, p) {
       v.mini.pic = { drawer: room.pic.drawer.name, you: me, hint: picPattern(room.pic), len: room.pic.word.length };
       if (me) v.mini.pic.word = room.pic.word;
     }
+    if (g.id === 'ns') {
+      v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av }));
+      if (room.ns) { v.mini.dead = room.players.filter((x) => x.ns && !x.ns.alive).map((x) => x.idx); v.mini.log = room.ns.log; }     // so a returning player sees who is already out
+    }
     if (g.id === 'pf') {
       v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av, t: x.pf ? Math.round(x.pf.t) : 0, lo: x.pf ? x.pf.lo : undefined, hi: x.pf ? x.pf.hi : undefined }));
       if (room.players.length === 2) v.mini.how = g.how.replace('Run around the edge, then throw', 'You each stay on your own side. Run along it, then throw');
@@ -151,7 +156,8 @@ function view(room, p) {
     }
     if (g.id === 'rc' && room.rc) v.mini.rc = { len: RC.LEN, track: room.rc.track, cars: room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av })) };
   }
-  if (room.state === 'standings' && room.pic && room.pic.word) v.reveal = room.pic.word;   // round is over: show the answer
+  if (room.state === 'standings' && room.pic && room.pic.word) v.reveal = room.pic.word;
+  if (room.state === 'standings' && room.ns) v.nsLog = room.ns.log;               // Number Sniper: who eliminated who   // round is over: show the answer
   if (room.state === 'standings') {
     v.standings = room.snap.map((r) => ({ ...r, you: r.name === p.name }));
     v.round = { index: room.qIndex, total: room.order.length };
@@ -222,10 +228,11 @@ function startMini(room) {             // every mini game opens with the same 3-
     room.order[room.qIndex] = alt.length ? alt[Math.floor(Math.random() * alt.length)] : 'whack';
   }
   const gid = room.order[room.qIndex];
-  miniCleanup(room); room.bomb = null; room.copy = null; room.pf = null;
+  miniCleanup(room); room.bomb = null; room.copy = null; room.pf = null; room.ns = null;
   room.rc = gid === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
   room.pic = gid === 'pic' ? picStart(room) : null;            // Picture This: choose the drawer and the word
   if (gid === 'pf') pfPlace(room);                              // Pie Fight: spread everyone around the edge
+  if (gid === 'ns') nsPlace(room);                              // Number Sniper: scatter everyone and give them numbers
   broadcast(room);
   room.timer = setTimeout(() => playMini(room), COUNTDOWN_MS);
 }
@@ -246,6 +253,7 @@ function playMini(room) {
   else if (g.id === 'bomb') bombInit(room);
   else if (g.id === 'copy') copyInit(room);
   else if (g.id === 'pf') pfInit(room);
+  else if (g.id === 'ns') nsInit(room);
   room.timer = setTimeout(() => endMini(room), g.ms);
 }
 // The order of mini games for a series: `n` rounds drawn from `ids`, every game once per lap (shuffled), never the same game twice in a row.
@@ -267,6 +275,75 @@ function miniCleanup(room) {          // stop any timers a mini game left runnin
   const b = room.bomb; if (b) { clearTimeout(b.fuseTimer); clearTimeout(b.warnTimer); clearTimeout(b.rebomb); }
   const c = room.copy; if (c) clearTimeout(c.timer);
 }
+
+// ---------- Number Sniper ----------
+// Everyone wanders a square arena with a secret-ish 4-digit number over their head. The number is only readable while the player stands
+// still, so the server only SENDS it then (a moving player's number never reaches anyone's phone). Type a number to eliminate its owner (+1).
+// Bumping into someone blurs both for 1s and gives both new numbers. Typing your own number eliminates you.
+const NS = { S: 1000, R: 46, MOVE: [1500, 4200], PAUSE: [900, 3600], SPEED: [110, 210], BLUR_MS: 1000, MISS_LOCK_MS: 1000, TICK: 50, GRACE_MS: 600 };
+const nsRand = (a, b) => a + Math.random() * (b - a);
+function nsNewNum(room, taken) {
+  const used = new Set(room.players.filter((p) => p.ns && p.ns.alive).map((p) => p.ns.num).concat(taken || []));
+  for (;;) { const n = String(Math.floor(Math.random() * 10000)).padStart(4, '0'); if (!used.has(n)) return n; }
+}
+function nsPlace(room) {
+  room.ns = { log: [], live: false, cool: new Map(), ending: false };
+  const placed = [];
+  room.players.forEach((p) => {
+    let x, y, tries = 0;
+    do { x = nsRand(NS.R + 40, NS.S - NS.R - 40); y = nsRand(NS.R + 40, NS.S - NS.R - 40); tries++; } while (tries < 200 && placed.some((q) => Math.hypot(q[0] - x, q[1] - y) < 230));
+    placed.push([x, y]);
+    const paused = Math.random() < 0.5;
+    p.ns = { x, y, ang: nsRand(0, Math.PI * 2), speed: nsRand(...NS.SPEED), mode: paused ? 'pause' : 'move', until: 0, num: '', blurUntil: 0, alive: true, pts: 0, missUntil: 0 };
+  });
+  room.players.forEach((p) => { p.ns.num = nsNewNum(room); });
+}
+function nsInit(room) {
+  const now = Date.now(); room.ns.live = true; room.nsLast = now;
+  room.players.forEach((p) => { p.ns.until = now + (p.ns.mode === 'move' ? nsRand(...NS.MOVE) : nsRand(...NS.PAUSE)) * Math.random(); });          // staggered, so they do not all change at once
+  room.tick = setInterval(() => nsTick(room), NS.TICK);
+}
+const nsLive = (room) => room.players.filter((p) => p.ns && p.ns.alive && !p.away);
+function nsTick(room) {
+  if (room.state !== 'play' || !room.ns) return;
+  const now = Date.now(), dt = Math.min(0.15, (now - room.nsLast) / 1000), ns = room.ns; room.nsLast = now;
+  const live = nsLive(room);
+  for (const p of live) {                                                         // wander: move for a while, pause for a while, at random
+    const f = p.ns;
+    if (now >= f.until) {
+      if (f.mode === 'move') { f.mode = 'pause'; f.until = now + nsRand(...NS.PAUSE); }
+      else { f.mode = 'move'; f.ang = nsRand(0, Math.PI * 2); f.speed = nsRand(...NS.SPEED); f.until = now + nsRand(...NS.MOVE); }
+    }
+    if (f.mode === 'move') {
+      f.x += Math.cos(f.ang) * f.speed * dt; f.y += Math.sin(f.ang) * f.speed * dt;
+      if (f.x < NS.R) { f.x = NS.R; f.ang = Math.PI - f.ang; } else if (f.x > NS.S - NS.R) { f.x = NS.S - NS.R; f.ang = Math.PI - f.ang; }
+      if (f.y < NS.R) { f.y = NS.R; f.ang = -f.ang; } else if (f.y > NS.S - NS.R) { f.y = NS.S - NS.R; f.ang = -f.ang; }
+    }
+  }
+  for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {                // bumping: both blur for 1s and get new numbers
+    const a = live[i], b = live[j], dx = b.ns.x - a.ns.x, dy = b.ns.y - a.ns.y, d = Math.hypot(dx, dy) || 0.01;
+    if (d >= NS.R * 2) continue;
+    if (a.ns.mode !== 'move' && b.ns.mode !== 'move') continue;                                    // two still players never overlap
+    const key = a.idx < b.idx ? a.idx + '-' + b.idx : b.idx + '-' + a.idx;
+    const push = (NS.R * 2 + 4 - d) / 2, ux = dx / d, uy = dy / d;
+    a.ns.x -= ux * push; a.ns.y -= uy * push; b.ns.x += ux * push; b.ns.y += uy * push;            // never stay stuck inside each other
+    if (a.ns.mode === 'move') a.ns.ang = Math.atan2(-uy, -ux) + nsRand(-0.6, 0.6);
+    if (b.ns.mode === 'move') b.ns.ang = Math.atan2(uy, ux) + nsRand(-0.6, 0.6);
+    if (now - (ns.cool.get(key) || 0) < 1300) continue;
+    ns.cool.set(key, now);
+    a.ns.blurUntil = b.ns.blurUntil = now + NS.BLUR_MS;
+    a.ns.num = ''; b.ns.num = ''; a.ns.num = nsNewNum(room); b.ns.num = nsNewNum(room, [a.ns.num]);
+    emit(room, { ev: 'nscol', a: a.idx, b: b.idx, x: Math.round((a.ns.x + b.ns.x) / 2), y: Math.round((a.ns.y + b.ns.y) / 2) });
+  }
+  // snapshot. A number is only included while it is readable (standing still and not freshly bumped).
+  emit(room, { ev: 'ns', t: now - room.playStart, c: live.map((p) => { const f = p.ns, blurred = now < f.blurUntil, readable = f.mode === 'pause' && !blurred;
+    return [p.idx, Math.round(f.x), Math.round(f.y), (f.mode === 'move' ? 1 : 0) | (blurred ? 2 : 0), readable ? +f.num : -1]; }) });
+}
+function nsCheckEnd(room) {                                                      // one player (or nobody) left standing: the round is over
+  const ns = room.ns; if (!ns || ns.ending) return;
+  if (nsLive(room).length <= 1) { ns.ending = true; clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }
+}
+function nsAward(room) { room.players.forEach((p) => { if (p.ns) p.score += p.ns.pts; }); room.ns.live = false; }
 
 // ---------- Pie Fight ----------
 // Players ride a loop around the edge of a square arena (t = distance along the loop, clockwise from the top-left corner).
@@ -561,6 +638,7 @@ function endMini(room) {
   if (room.bomb) bombAward(room);
   if (room.copy) copyAward(room);
   if (room.pf && room.pf.live) pfAward(room);
+  if (room.ns && room.ns.live) nsAward(room);
   miniCleanup(room);
   room.players.forEach((p) => { p.gained = p.score - p.prev; });
   enterStandings(room);
@@ -578,6 +656,7 @@ function advance(room) {
 }
 // A roster change (someone left or went away): can the game carry on without them?
 function settle(room) {
+  if (room.state === 'play' && room.ns && room.ns.live) nsCheckEnd(room);
   if (room.state === 'play' && room.pf && room.pf.live && here(room).length < 2) return endMini(room);
   if (room.state === 'play' && room.pic && room.pic.live) {
     if (!room.players.includes(room.pic.drawer) || here(room).length < 2) return endMini(room);   // drawer gone / nobody left to guess
@@ -749,6 +828,17 @@ const ACTIONS = {
       emit(room, { ev: 'picguess', name: p.name, text: raw.slice(0, 24) });
       if (w.length >= 4 && g.length >= 3 && lev1(g, w)) send(ws, { type: 'ev', ev: 'picclose' });
     }
+  },
+  nsfire(ws, m) {   // Number Sniper: a 4-digit number typed in
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.ns || !room.ns.live || !p.ns || !p.ns.alive || p.away) return;
+    const now = Date.now(); if (now < p.ns.missUntil || now - room.playStart < NS.GRACE_MS) return;
+    const num = String(m.num == null ? '' : m.num).replace(/\D/g, ''); if (num.length !== 4) return;
+    const t = room.players.find((q) => q.ns && q.ns.alive && !q.away && q.ns.num === num);                 // away players cannot be sniped
+    if (!t) { p.ns.missUntil = now + NS.MISS_LOCK_MS; send(ws, { type: 'ev', ev: 'nsmiss', ms: NS.MISS_LOCK_MS }); return; }
+    const self = t === p; t.ns.alive = false; if (!self) p.ns.pts += 1;
+    room.ns.log.push({ by: p.name, victim: t.name, self, at: now - room.playStart });
+    emit(room, { ev: 'nsout', i: t.idx, by: p.idx, self, pts: p.ns.pts, left: nsLive(room).length });
+    nsCheckEnd(room);
   },
   pfmove(ws, m) {   // Pie Fight: left (+1, clockwise) / right (-1) held, 0 = released
     const p = ws.player; if (!ws.room || ws.room.state !== 'play' || !ws.room.pf || !p.pf) return; p.pf.dir = m.d > 0 ? 1 : m.d < 0 ? -1 : 0;
