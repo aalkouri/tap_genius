@@ -67,8 +67,10 @@ function closeRoom(room) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
+  pic:   { id: 'pic', name: 'Picture This', icon: '🎨', how: 'One player draws a secret word. Everyone else types guesses — fast guesses score more!', ms: 75000, min: 2 },
   rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs. Wait for the bridges!', ms: 70000 },
 };
+const WORDS = JSON.parse(fs.readFileSync(path.join(__dirname, 'words.json'), 'utf8'));   // things that are fun to draw
 const MINI_ROUNDS = 3, COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
 const MISS_LOCK_MS = 1000, MISS_GRACE_MS = 500;   // empty-square penalty: 1s lockout; only squares with no mole for 0.5s count as empty
 const HOLE_REST_MS = 1500;   // after a mole leaves a hole (whacked or not), that hole stays empty this long
@@ -121,14 +123,20 @@ function view(room, p) {
   v.mode = room.mode; v.host = room.host.name;
   v.config = { band: room.band, cats: room.cats };
   if (room.state === 'lobby') {
-    if (room.mode === 'mini') v.mini = { games: Object.values(MINI).map(({ id, name, icon }) => ({ id, name, icon })), rounds: MINI_ROUNDS };
+    if (room.mode === 'mini') v.mini = { games: Object.values(MINI).map(({ id, name, icon, min }) => ({ id, name, icon, min: min || 1 })), rounds: MINI_ROUNDS };
     else v.catalog = { bands: BANDS.map((id) => ({ id, label: BAND_LABEL[id] })), cats: CATS };
   }
   if (room.state === 'countdown' || room.state === 'play') {
     const g = MINI[room.order[room.qIndex]];
     v.mini = { game: g.id, name: g.name, icon: g.icon, how: g.how, index: room.qIndex, total: room.order.length, ms: room.state === 'countdown' ? COUNTDOWN_MS : g.ms, cells: CELLS };
+    if (g.id === 'pic' && room.pic) {   // the word itself only ever goes to the drawer
+      const me = p === room.pic.drawer;
+      v.mini.pic = { drawer: room.pic.drawer.name, you: me, hint: picPattern(room.pic), len: room.pic.word.length };
+      if (me) v.mini.pic.word = room.pic.word;
+    }
     if (g.id === 'rc' && room.rc) v.mini.rc = { len: RC.LEN, track: room.rc.track, cars: room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av })) };
   }
+  if (room.state === 'standings' && room.pic && room.pic.word) v.reveal = room.pic.word;   // round is over: show the answer
   if (room.state === 'standings') {
     v.standings = room.snap.map((r) => ({ ...r, you: r.name === p.name }));
     v.round = { index: room.qIndex, total: room.order.length };
@@ -194,7 +202,10 @@ function startMini(room) {             // every mini game opens with the same 3-
   clearTimeout(room.timer); clearTimeout(room.spawnTimer);
   room.state = 'countdown';
   room.players.forEach((p, i) => { p.prev = p.score; p.gained = 0; p.idx = i; });
-  room.rc = MINI[room.order[room.qIndex]].id === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
+  if ((MINI[room.order[room.qIndex]].min || 1) > room.players.length) room.order[room.qIndex] = 'whack';   // not enough players left for this game
+  const gid = room.order[room.qIndex];
+  room.rc = gid === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
+  room.pic = gid === 'pic' ? picStart(room) : null;            // Picture This: choose the drawer and the word
   broadcast(room);
   room.timer = setTimeout(() => playMini(room), COUNTDOWN_MS);
 }
@@ -202,6 +213,7 @@ function playMini(room) {
   if (room.state !== 'countdown') return;
   const g = MINI[room.order[room.qIndex]];
   room.state = 'play'; room.playStart = Date.now(); room.moles = null;
+  if (g.id === 'pic') picPrep(room);
   broadcast(room);
   if (g.id === 'whack') {
     room.moles = new Map(); room.moleSeq = 0;
@@ -210,8 +222,46 @@ function playMini(room) {
     room.players.forEach((p) => { p.missUntil = 0; });
     room.spawnTimer = setTimeout(() => spawnMoles(room), 500);
   } else if (g.id === 'rc') rcInit(room);
+  else if (g.id === 'pic') picHints(room);
   room.timer = setTimeout(() => endMini(room), g.ms);
 }
+// ---------- Picture This ----------
+// One player (the drawer) gets a secret word and draws it; strokes are relayed live to everyone else, who type guesses.
+// Faster correct guesses earn more, and the drawer earns a share of every correct guess.
+const PIC = { MIN: 3, SPAN: 7 };               // a correct guess is worth 3..10 points depending on how much time was left
+function picStart(room) {
+  room.drawn = room.drawn || new Set(); room.usedWords = room.usedWords || new Set();
+  let pool = room.players.filter((p) => !room.drawn.has(p));
+  if (!pool.length) { room.drawn.clear(); pool = room.players; }                 // everyone has drawn: start another lap
+  const drawer = pool[Math.floor(Math.random() * pool.length)]; room.drawn.add(drawer);
+  let words = WORDS.filter((w) => !room.usedWords.has(w)); if (!words.length) { room.usedWords.clear(); words = WORDS; }
+  const word = words[Math.floor(Math.random() * words.length)]; room.usedWords.add(word);
+  return { drawer, word, shown: new Set(), live: false, points: 0 };
+}
+const picPattern = (pic) => [...pic.word].map((ch, i) => (ch === ' ' ? ' ' : pic.shown.has(i) ? ch : '_')).join('');
+function picPrep(room) {                                                          // called as the round starts
+  if (!room.players.includes(room.pic.drawer)) room.pic.drawer = room.players[Math.floor(Math.random() * room.players.length)];   // drawer left during the countdown
+  room.pic.live = true; room.pic.points = 0;
+  room.players.forEach((p) => { p.guessed = false; p.lastGuess = 0; });
+}
+function picHints(room) {                                                         // reveal a few letters as time runs out
+  const pic = room.pic, g = MINI.pic, n = pic.word.replace(/ /g, '').length >= 8 ? 2 : pic.word.length >= 4 ? 1 : 0;
+  if (!n) return;
+  const order = shuffle([...pic.word].map((c, i) => (c === ' ' ? -1 : i)).filter((i) => i >= 0));
+  const reveal = (at, next) => { room.spawnTimer = setTimeout(() => { if (room.state !== 'play') return; order.splice(0, n).forEach((i) => pic.shown.add(i)); emit(room, { ev: 'pichint', hint: picPattern(pic) }); next && next(); }, g.ms * at - (Date.now() - room.playStart)); };
+  reveal(0.42, () => reveal(0.68));
+}
+function picCheckDone(room) {
+  const guessers = room.players.filter((p) => p !== room.pic.drawer);
+  if (guessers.length && guessers.every((p) => p.guessed)) { clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }
+}
+const lev1 = (a, b) => {                                                           // are the two words exactly one edit apart?
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : b.slice(i + 1) === a.slice(i);
+};
+
 // ---------- RC Mayhem ----------
 // Every player drives an identical lane. The server runs all the physics (30 Hz) so the race is fair:
 //  - log (small): jump it, or it slows you      - rock (big): engine cuts out for a couple of seconds
@@ -316,6 +366,7 @@ function endMini(room) {
   if (room.state !== 'play') return;
   clearTimeout(room.spawnTimer); clearInterval(room.tick); room.tick = null;
   if (room.rc && room.rc.live) rcAward(room);
+  if (room.pic) room.pic.live = false;
   room.players.forEach((p) => { p.gained = p.score - p.prev; });
   enterStandings(room);
 }
@@ -335,6 +386,10 @@ function removePlayer(ws) {
   room.players = room.players.filter((p) => p.ws !== ws); ws.room = null;
   if (!room.players.length) { closeRoom(room); listChanged(); return; }
   if (room.host.ws === ws) room.host = room.players[0];
+  if (room.state === 'play' && room.pic && room.pic.live) {
+    if (!room.players.includes(room.pic.drawer) || room.players.length < 2) return endMini(room);   // drawer left / nobody left to guess
+    picCheckDone(room);                                  // the player we were waiting on may have been the last non-guesser
+  }
   if (room.state === 'question' && room.players.every((p) => p.choice !== null)) return reveal(room);
   if (checkAllReady(room)) return;       // the player we were waiting on left
   broadcast(room);
@@ -383,7 +438,8 @@ const ACTIONS = {
   start(ws) {
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
     if (room.mode === 'mini') {
-      const ids = shuffle(Object.keys(MINI));
+      // FORCE_MINI=<id> is for automated tests only (always play that game); normal play shuffles the eligible games
+      const ids = process.env.FORCE_MINI && MINI[process.env.FORCE_MINI] ? [process.env.FORCE_MINI] : shuffle(Object.keys(MINI).filter((id) => (MINI[id].min || 1) <= room.players.length));
       room.order = Array.from({ length: MINI_ROUNDS }, (_, i) => ids[i % ids.length]);
       room.qIndex = 0; return startMini(room);
     }
@@ -416,6 +472,35 @@ const ACTIONS = {
     if (now < room.holeEnd[cell] + MISS_GRACE_MS) return;                                              // a mole only just left: near miss, no penalty
     p.missUntil = now + MISS_LOCK_MS; p.score -= 1;
     emit(room, { ev: 'miss', by: p.name, cell, n: p.score - p.prev });
+  },
+  draw(ws, m) {     // Picture This: the drawer's pen strokes, relayed to everyone else
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.pic || !room.pic.live || p !== room.pic.drawer) return;
+    let msg;
+    if (m.op === 'seg') {
+      const raw = Array.isArray(m.pts) ? m.pts.slice(0, 160) : [], pts = [];
+      for (let i = 0; i + 1 < raw.length; i += 2) pts.push(Math.max(0, Math.min(1000, raw[i] | 0)), Math.max(0, Math.min(800, raw[i + 1] | 0)));
+      if (!pts.length || room.pic.points + pts.length > 60000) return;
+      room.pic.points += pts.length;
+      msg = { ev: 'pic', op: 'seg', id: m.id | 0, c: Math.max(0, Math.min(9, m.c | 0)), w: Math.max(2, Math.min(48, m.w | 0)), pts };
+    } else if (m.op === 'undo' || m.op === 'clear') msg = { ev: 'pic', op: m.op };
+    else return;
+    room.players.forEach((q) => { if (q !== p) send(q.ws, { type: 'ev', ...msg }); });
+  },
+  guess(ws, m) {    // Picture This: a guess typed by a non-drawer
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.pic || !room.pic.live || p === room.pic.drawer || p.guessed) return;
+    const now = Date.now(); if (now - p.lastGuess < 450) return; p.lastGuess = now;
+    const raw = String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, 30); if (!raw) return;
+    const g = raw.toLowerCase().replace(/[^a-z]/g, ''), w = room.pic.word.replace(/ /g, '');
+    if (g && (g === w || (w.length > 3 && (g === w + 's' || g + 's' === w)))) {
+      const frac = Math.max(0, 1 - (now - room.playStart) / MINI.pic.ms), pts = PIC.MIN + Math.round(PIC.SPAN * frac);
+      p.guessed = true; p.score += pts; room.pic.drawer.score += Math.ceil(pts / 2);                  // faster guess -> more for both of you
+      emit(room, { ev: 'picok', name: p.name });
+      send(ws, { type: 'ev', ev: 'picmine', pts });
+      picCheckDone(room);
+    } else {
+      emit(room, { ev: 'picguess', name: p.name, text: raw.slice(0, 24) });
+      if (w.length >= 4 && g.length >= 3 && lev1(g, w)) send(ws, { type: 'ev', ev: 'picclose' });
+    }
   },
   rcgo(ws, m) {    // RC Mayhem: GO button held / released
     const p = ws.player; if (!ws.room || ws.room.state !== 'play' || !p.rc) return; p.rc.go = !!m.on;

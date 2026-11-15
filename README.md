@@ -1,5 +1,5 @@
 # ⚡ Tap Genius
-Real-time multiplayer party game for phones. One player hosts a game (Trivia or Mini Games); everyone else taps **Join game** and picks it from a live list of open games — no codes to type. Trivia: race to tap the right answer (faster = more points, 500–1000 per question). Mini Games: quick challenges — whack-a-mole and RC Mayhem (a lane-per-player RC car race with logs, boulders and bridges that go up and down).
+Real-time multiplayer party game for phones. One player hosts a game (Trivia or Mini Games); everyone else taps **Join game** and picks it from a live list of open games — no codes to type. Trivia: race to tap the right answer (faster = more points, 500–1000 per question). Mini Games: quick challenges — whack-a-mole, RC Mayhem (a lane-per-player RC car race with logs, boulders and bridges that go up and down) and Picture This (one player draws a secret word live, everyone else races to guess it; needs 2+ players).
 Node + WebSocket server, plain HTML/JS client — same stack as `girl_game`.
 
 Run locally: `npm install && PORT=8080 node server.js`, open `http://localhost:8080` (open a few tabs to play).

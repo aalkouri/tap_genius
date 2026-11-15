@@ -108,7 +108,8 @@
     S.players.forEach((pl) => { if (pl.av) new Image().src = `/avatar/${pl.av}.jpg`; });   // warm the cache before the game starts
     app.innerHTML = `${brand}
       <div class="muted">Game ${g.index + 1} / ${g.total}</div>
-      <div class="card cd-card"><div class="cd-icon">${g.icon}</div><h2>${esc(g.name)}</h2><p>${esc(g.how)}</p></div>
+      <div class="card cd-card"><div class="cd-icon">${g.icon}</div><h2>${esc(g.name)}</h2><p>${esc(g.how)}</p>
+        ${g.pic ? `<p class="cd-who">${g.pic.you ? "🎨 You're drawing!" : `🎨 ${esc(g.pic.drawer)} is drawing!`}</p>` : ''}</div>
       <div class="cd-num" id="cdnum"></div>`;
     const el = document.getElementById('cdnum'), timers = [];
     ['3', '2', '1', 'GO!'].forEach((t, i) => timers.push(setTimeout(() => {
@@ -247,6 +248,117 @@
       }
     });
     anim = { stop() { timers.forEach(clearTimeout); ivs.forEach(clearInterval); try { speechSynthesis.cancel(); } catch (e) { } } };
+  }
+
+  // ---- Picture This: the drawer sketches on a shared white board; everyone else watches live and types guesses ----
+  const PAL = ['#1b1b1b', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa', '#6d4c41', '#ffffff'];   // last one is the eraser
+  const SIZES = [5, 12, 26];
+  function renderPic() {
+    const g = S.mini, pic = g.pic, me = S.you.name, drawer = S.players.find((x) => x.name === pic.drawer) || { name: pic.drawer }, isDrawer = pic.you;
+    const crowd = S.players.filter((x) => x.name !== pic.drawer);
+    const wob = () => `--t:${(2.2 + Math.random() * 2.4).toFixed(2)}s;--d:-${(Math.random() * 3).toFixed(2)}s;--r:${(1 + Math.random() * 2.5).toFixed(1)}deg;--x:${(2 + Math.random() * 4).toFixed(1)}px`;
+    const artist = `<div class="artist" id="artist"><div class="toon-in">${faceImg(drawer.av, 'thead')}
+        <svg class="tbody" viewBox="0 0 60 64" aria-hidden="true" style="--shirt:#ff9a0a">
+          <g class="leg l"><line x1="25" y1="36" x2="25" y2="57"/><ellipse cx="26.5" cy="60" rx="6" ry="3.5"/></g><g class="leg r"><line x1="35" y1="36" x2="35" y2="57"/><ellipse cx="36.5" cy="60" rx="6" ry="3.5"/></g>
+          <rect class="torso" x="17" y="4" width="26" height="36" rx="10"/>
+          <g class="arm l"><line x1="18" y1="11" x2="18" y2="36"/><circle cx="18" cy="38" r="4.8"/></g>
+          <g class="arm r" id="penarm"><line x1="42" y1="11" x2="42" y2="36"/><circle cx="42" cy="38" r="4.8"/><line class="marker" x1="42" y1="40" x2="42" y2="52"/></g>
+        </svg></div></div>`;
+    app.innerHTML = `<div class="timer"><div id="bar"></div></div>
+      <div class="pichead">${isDrawer ? `<span class="muted">Draw this</span><b class="picword">${esc(pic.word.toUpperCase())}</b>` : '<div class="hint" id="hint"></div>'}</div>
+      <div class="easel"><canvas id="pcv"></canvas></div>
+      <div class="stagerow">${isDrawer ? '' : artist}<div class="audience" id="aud">${crowd.map((x) => `<div class="aud${x.name === me ? ' me' : ''}" data-name="${esc(x.name)}" style="${wob()}">${faceImg(x.av, 'audface')}<span class="chk">✓</span></div>`).join('')}</div></div>
+      <div class="feed" id="feed"></div>
+      <div id="picctl"></div>`;
+    const cv = document.getElementById('pcv'), ctx = cv.getContext('2d'), bar = document.getElementById('bar'), feed = document.getElementById('feed'), ctl = document.getElementById('picctl');
+    const strokes = [], byId = new Map(); let scale = 1, dpr = 1, raf = 0, got = false, tickAt = -1;
+    const t0 = performance.now(), timers = [];
+    const size = () => {
+      dpr = Math.min(2, window.devicePixelRatio || 1);
+      const w = Math.min(app.clientWidth, 560), h = Math.round(w * 0.8);
+      cv.style.width = w + 'px'; cv.style.height = h + 'px'; cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); scale = (w * dpr) / 1000; redraw();
+    };
+    const line = (st, from) => {
+      ctx.strokeStyle = ctx.fillStyle = PAL[st.c] || PAL[0]; ctx.lineWidth = st.w * scale; ctx.lineCap = ctx.lineJoin = 'round';
+      const pts = st.pts;
+      if (pts.length === 2) { ctx.beginPath(); ctx.arc(pts[0] * scale, pts[1] * scale, st.w * scale / 2, 0, 7); ctx.fill(); return; }
+      ctx.beginPath(); ctx.moveTo(pts[Math.max(0, from - 2)] * scale, pts[Math.max(0, from - 2) + 1] * scale);
+      for (let i = Math.max(0, from - 2) + 2; i < pts.length; i += 2) ctx.lineTo(pts[i] * scale, pts[i + 1] * scale);
+      ctx.stroke();
+    };
+    function redraw() { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height); strokes.forEach((st) => line(st, 0)); }
+    size(); window.addEventListener('resize', size);
+    const addFeed = (html, cls = '') => { const d = document.createElement('div'); d.className = 'fl ' + cls; d.innerHTML = html; feed.appendChild(d); while (feed.children.length > 4) feed.firstChild.remove(); };
+
+    // ---- the artist slides under the pen and waves the marker while strokes arrive
+    const artistEl = document.getElementById('artist'); let drawingUntil = 0;
+    const penAt = (x) => { if (!artistEl) return; artistEl.style.left = Math.max(12, Math.min(88, x / 10)) + '%'; artistEl.classList.add('drawing'); drawingUntil = performance.now() + 380; };
+    const penTimer = setInterval(() => { if (artistEl && performance.now() > drawingUntil) artistEl.classList.remove('drawing'); }, 150); timers.push(penTimer);
+
+    // ---- drawer: tools + pointer drawing
+    let color = 0, sizeIdx = 1, seq = 0;
+    if (isDrawer) {
+      ctl.innerHTML = `<div class="tools"><div class="pal">${PAL.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}${i === 8 ? ' erase' : ''}" data-c="${i}" style="background:${c}" aria-label="${i === 8 ? 'Eraser' : 'Colour'}">${i === 8 ? '⌫' : ''}</button>`).join('')}</div>
+        <div class="pal2"><span class="sz">${SIZES.map((z, i) => `<button class="szb${i === 1 ? ' on' : ''}" data-z="${i}"><i style="width:${6 + i * 5}px;height:${6 + i * 5}px"></i></button>`).join('')}</span>
+        <button class="tl" id="undo">↶ Undo</button><button class="tl" id="clr">🗑 Clear</button></div></div>`;
+      ctl.querySelectorAll('.sw').forEach((b) => (b.onclick = () => { color = +b.dataset.c; ctl.querySelectorAll('.sw').forEach((x) => x.classList.toggle('on', x === b)); }));
+      ctl.querySelectorAll('.szb').forEach((b) => (b.onclick = () => { sizeIdx = +b.dataset.z; ctl.querySelectorAll('.szb').forEach((x) => x.classList.toggle('on', x === b)); }));
+      document.getElementById('undo').onclick = () => { if (strokes.length) { strokes.pop(); redraw(); send({ action: 'draw', op: 'undo' }); } };
+      document.getElementById('clr').onclick = () => { if (strokes.length) { strokes.length = 0; redraw(); send({ action: 'draw', op: 'clear' }); } };
+      let cur = null, pend = [], flushT = 0, lastX = -9, lastY = -9;
+      const pos = (e) => { const r = cv.getBoundingClientRect(); return [Math.max(0, Math.min(1000, Math.round((e.clientX - r.left) / r.width * 1000))), Math.max(0, Math.min(800, Math.round((e.clientY - r.top) / r.height * 800)))]; };
+      const flush = () => { flushT = 0; if (cur && pend.length) { send({ action: 'draw', op: 'seg', id: cur.id, c: cur.c, w: cur.w, pts: pend.splice(0, 160) }); } };
+      cv.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch (x) { }
+        const [x, y] = pos(e); cur = { id: ++seq, c: color, w: color === 8 ? SIZES[sizeIdx] * 1.7 : SIZES[sizeIdx], pts: [x, y] }; strokes.push(cur); line(cur, 0);
+        pend = [x, y]; lastX = x; lastY = y; flush();
+      });
+      cv.addEventListener('pointermove', (e) => {
+        if (!cur) return; e.preventDefault();
+        for (const ev of (e.getCoalescedEvents ? e.getCoalescedEvents() : [e])) {
+          const [x, y] = pos(ev); if (Math.abs(x - lastX) + Math.abs(y - lastY) < 3) continue;
+          const from = cur.pts.length; cur.pts.push(x, y); pend.push(x, y); lastX = x; lastY = y; line(cur, from);
+        }
+        if (!flushT) flushT = setTimeout(flush, 55);
+      });
+      const end = () => { if (cur) { flush(); cur = null; } };
+      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((n) => cv.addEventListener(n, end));
+      cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    } else {
+      ctl.innerHTML = `<form class="guessbar" id="gform"><input id="gin" placeholder="Type your guess…" maxlength="30" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"><button id="gsend">Guess</button></form>`;
+      const form = document.getElementById('gform'), input = document.getElementById('gin');
+      form.onsubmit = (e) => { e.preventDefault(); const t = input.value.trim(); if (!t) return; send({ action: 'guess', text: t }); input.value = ''; input.focus(); };
+    }
+
+    const setHint = (h) => { const el = document.getElementById('hint'); if (!el) return;
+      el.innerHTML = `<div class="lts">${[...h].map((ch) => ch === ' ' ? '<i class="gap"></i>' : `<span class="lt${ch === '_' ? '' : ' shown'}">${ch === '_' ? '' : esc(ch.toUpperCase())}</span>`).join('')}</div><div class="muted small">${pic.len - (pic.hint.split(' ').length - 1)} letters${h.includes('_') ? '' : ''}</div>`; };
+    if (!isDrawer) setHint(pic.hint);
+    const frame = (now) => { raf = requestAnimationFrame(frame); bar.style.width = Math.max(0, 100 - ((now - t0) / g.ms) * 100) + '%';
+      const left = Math.ceil((g.ms - (now - t0)) / 1000); if (!isDrawer && !got && left <= 5 && left > 0 && left !== tickAt) { tickAt = left; Sfx.play('tick'); } };
+    raf = requestAnimationFrame(frame);
+
+    live = {
+      onEvent(ev) {
+        if (ev.ev === 'pic' && !isDrawer) {
+          if (ev.op === 'seg') {
+            let st = byId.get(ev.id); if (!st) { st = { id: ev.id, c: ev.c, w: ev.w, pts: [] }; byId.set(ev.id, st); strokes.push(st); }
+            const from = st.pts.length; st.pts.push(...ev.pts); line(st, from); penAt(ev.pts[ev.pts.length - 2]);
+          } else if (ev.op === 'undo') { const st = strokes.pop(); if (st) byId.delete(st.id); redraw(); }
+          else if (ev.op === 'clear') { strokes.length = 0; byId.clear(); redraw(); }
+        } else if (ev.ev === 'pichint') { if (!isDrawer) { setHint(ev.hint); addFeed('💡 A letter was revealed', 'sys'); } }
+        else if (ev.ev === 'picguess') addFeed(`<b>${esc(ev.name)}</b>: ${esc(ev.text)}`);
+        else if (ev.ev === 'picok') {
+          addFeed(`🎉 <b>${esc(ev.name)}</b> got it!`, 'ok');
+          const el = [...document.querySelectorAll('.aud')].find((e) => e.dataset.name === ev.name); if (el) { el.classList.add('got'); el.classList.remove('hop'); void el.offsetWidth; el.classList.add('hop'); }
+          if (ev.name !== me) Sfx.play('pop');
+        } else if (ev.ev === 'picmine') {
+          got = true; Sfx.play('correct'); addFeed(`✅ You got it! <b>+${ev.pts}</b>`, 'ok');
+          ctl.innerHTML = `<div class="gotit">✅ You got it! <b>+${ev.pts} points</b><div class="muted small">Keep watching the others…</div></div>`;
+        } else if (ev.ev === 'picclose') addFeed('🔥 So close!', 'sys');
+      },
+      stop() { cancelAnimationFrame(raf); window.removeEventListener('resize', size); timers.forEach(clearInterval); try { window.__lastDrawing = cv.toDataURL('image/jpeg', 0.7); } catch (e) { window.__lastDrawing = null; } },
+    };
+    if (!isDrawer) setTimeout(() => { const i = document.getElementById('gin'); if (i) i.focus(); }, 100);
   }
 
   // ---- RC Mayhem: every player has their own lane on one canvas; the server runs the physics, we draw what it says ----
@@ -449,6 +561,7 @@
     app.innerHTML = `${brand}
       <div class="muted">Round ${S.round.index + 1} / ${S.round.total}</div>
       <h2 class="st-title">${S.isLast ? '🏁 Final standings' : '📊 Standings'}</h2>
+      ${S.reveal ? `<div class="card reveal"><div class="muted">The word was</div><div class="revword">${esc(S.reveal.toUpperCase())}</div>${window.__lastDrawing ? `<img src="${window.__lastDrawing}" alt="">` : ''}</div>` : ''}
       <div class="board" style="height:${rows.length * ROW}px">${rows.map((r) => `
         <div class="srow ${r.you ? 'me' : ''}" data-name="${esc(r.name)}" style="transform:translateY(${r.from * ROW}px)">
           <div class="rk"><span class="rkn">${r.from + 1}</span></div>
@@ -519,7 +632,7 @@
       const key = S.state + ':' + S.code + ':' + S.mini.index;
       if (key === liveKey) return;
       liveKey = key; stopLive(); stopAnim(); standKey = null;
-      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : renderPlay();
+      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : renderPlay();
     }
     liveKey = null; stopLive();
     if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)
@@ -590,7 +703,7 @@
     if (S.state === 'lobby' && S.mode === 'mini') {
       h += `${lobbyHead()}
         <div class="card"><b>🎮 Mini Games</b> <span class="muted">(${S.mini.rounds} rounds)</span>
-          <div class="chips">${S.mini.games.map((g) => `<span class="chip on static">${g.icon} ${esc(g.name)}</span>`).join('')}</div></div>
+          <div class="chips">${S.mini.games.map((g) => { const need = g.min > S.players.length; return `<span class="chip static ${need ? '' : 'on'}">${g.icon} ${esc(g.name)}${g.min > 1 ? ` <small>(${g.min}+ players)</small>` : ''}</span>`; }).join('')}</div></div>
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
         ${S.isHost ? '<button id="start">Start game</button>' : '<p class="muted">Waiting for host to start…</p>'}`;
     } else if (S.state === 'lobby') {
