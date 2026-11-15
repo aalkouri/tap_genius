@@ -35,6 +35,16 @@ window.Sfx = (() => {
   })();
   document.addEventListener('visibilitychange', () => (document.hidden ? music.pause() : music.play()));
 
+  // crowd-like noise swell (filtered white noise) for the podium cheer
+  function noise(t, dur, vol = 0.15, freq = 1400) {
+    const c = ctx, t0 = c.currentTime + t, len = Math.floor(c.sampleRate * dur);
+    const buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = buf; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 0.6;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + dur * 0.25); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f); f.connect(g); g.connect(master); src.start(t0); src.stop(t0 + dur);
+  }
   const N = { C4: 261.6, D4: 293.7, E4: 329.6, G4: 392, A4: 440, C5: 523.3, D5: 587.3, E5: 659.3, G5: 784, A5: 880, C6: 1046.5, E6: 1318.5 };
 
   const SOUNDS = {
@@ -56,6 +66,10 @@ window.Sfx = (() => {
     pop:      () => tone(320, 0, 0.09, 'sine', 0.12, 640),                                // a head pops up
     mine:     () => { tone(N.E5, 0, 0.08, 'triangle', 0.22); tone(N.C6, 0.07, 0.14, 'triangle', 0.22); },  // I got it
     bonk:     () => tone(210, 0, 0.12, 'square', 0.1, 95),                                // someone else got it
+    step:     () => tone(150, 0, 0.05, 'triangle', 0.09, 90),                             // footsteps in the podium cutscene
+    land:     () => tone(260, 0, 0.1, 'sine', 0.16, 120),
+    shutter:  () => { noise(0, 0.07, 0.2, 3000); noise(0.09, 0.05, 0.14, 2200); },         // camera click
+    cheer:    () => { noise(0, 1.8, 0.2, 1300); noise(0.2, 1.6, 0.12, 2600); },
     done:     () => [N.G4, N.C5, N.E5, N.G5].forEach((f, i) => tone(f, i * 0.12, 0.25, 'sine', 0.18)),
   };
 

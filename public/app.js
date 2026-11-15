@@ -1,8 +1,12 @@
 (() => {
   const app = document.getElementById('app');
-  let ws, S = null, err = '', timerId = null, standKey = null, anim = null;
+  let ws, S = null, err = '', timerId = null, standKey = null, anim = null, doneKey = null;
   let screen = 'home', hostName = '', liveKey = null, live = null;   // home | mode (game-type picker) | browse (open games); live = running countdown / mini game
-  let games = [];                                                    // open games, pushed live by the server while browsing
+  let games = [];
+  // each player's head shot (a small JPEG data URL), taken once and remembered on this device
+  let face = null, afterCam = 'home', cam = null;
+  try { face = localStorage.getItem('tg_face'); hostName = localStorage.getItem('tg_name') || ''; } catch (e) { }
+  const faceImg = (av, cls = '') => `<img class="face ${cls}" src="${av ? `/avatar/${esc(av)}.jpg` : '/img/bulb.png'}" alt="" onerror="this.style.visibility='hidden'">`;                                                    // open games, pushed live by the server while browsing
 
   function connect(then) {
     if (ws && ws.readyState === 1) return then();
@@ -26,7 +30,6 @@
         if (cur.myChoice !== null && cur.myChoice === cur.correct) Sfx.play('correct');
         else { Sfx.play('buzzer'); bigX(cur.myChoice === null ? "Time's up!" : 'Wrong!'); }
       }
-      else if (cur.state === 'done') Sfx.play(cur.players[0] && cur.players[0].name === cur.you.name && cur.players[0].score > 0 ? 'win' : 'done');
     } else if (cur.state === 'lobby' && prev.players.length < cur.players.length) Sfx.play('join');
   }
   // Wrong answer: a big red X slams over the whole screen (taps pass through it), then fades.
@@ -42,14 +45,67 @@
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   const brand = '<div class="brand"><img src="/img/bulb.png" alt=""><span>Tap Genius</span></div>';
   const hero = '<div class="hero"><img src="/img/logo.jpg" alt="Tap Genius"></div><div class="tagline">Tap fast. Think faster!</div>';
-  const board = (players) => `<ol>${players.map((p) => `<li>${esc(p.name)}<span>${p.score}</span></li>`).join('')}</ol>`;
+  const board = (players) => `<ol class="plist">${players.map((p) => `<li>${faceImg(p.av)}<span class="pn">${esc(p.name)}</span><span class="ps">${p.score}</span></li>`).join('')}</ol>`;
+
+  // ---- camera: fit your head in the oval, tap, confirm ----
+  const OV = { W: 300, H: 400, cx: 150, cy: 150, rx: 78, ry: 100 };     // guide geometry in a 300x400 frame; output keeps the oval's shape
+  function stopCam() { if (cam) { cam.getTracks().forEach((t) => t.stop()); cam = null; } }
+  // crop the oval's bounding box out of a source (video or image) that is shown "cover"-fitted in the frame
+  function cropHead(src, sw, sh, mirror) {
+    const scale = Math.max(OV.W / sw, OV.H / sh), dx = (OV.W - sw * scale) / 2, dy = (OV.H - sh * scale) / 2;
+    const w = (OV.rx * 2) / scale, h = (OV.ry * 2) / scale, y = (OV.cy - OV.ry - dy) / scale;
+    let x = (OV.cx - OV.rx - dx) / scale; if (mirror) x = sw - x - w;
+    const c = document.createElement('canvas'); c.width = 156; c.height = 200;
+    const g = c.getContext('2d'); if (mirror) { g.translate(c.width, 0); g.scale(-1, 1); }
+    g.drawImage(src, x, y, w, h, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.82);
+  }
+  function renderCamera(shot) {
+    const guide = `<svg class="camov" viewBox="0 0 ${OV.W} ${OV.H}" preserveAspectRatio="none" aria-hidden="true">
+        <defs><mask id="hole"><rect width="${OV.W}" height="${OV.H}" fill="#fff"/><ellipse cx="${OV.cx}" cy="${OV.cy}" rx="${OV.rx}" ry="${OV.ry}" fill="#000"/></mask></defs>
+        <rect width="${OV.W}" height="${OV.H}" fill="rgba(3,20,60,.66)" mask="url(#hole)"/>
+        <path d="M150 262 C118 262 104 276 96 286 C60 292 34 318 30 400 L270 400 C266 318 240 292 204 286 C196 276 182 262 150 262 Z" fill="rgba(255,255,255,.16)" stroke="#fff" stroke-width="3" stroke-dasharray="9 7"/>
+        <ellipse cx="${OV.cx}" cy="${OV.cy}" rx="${OV.rx}" ry="${OV.ry}" fill="none" stroke="#FFE45A" stroke-width="4"/>
+      </svg>`;
+    if (shot) {                                            // confirm step
+      app.innerHTML = `${brand}<h2 class="st-title">Looking good?</h2>
+        <div class="shot"><img class="face huge" src="${shot}" alt="Your picture"></div>
+        <button id="use">Use this picture</button><button class="secondary" id="again">Retake</button>`;
+      document.getElementById('use').onclick = () => {
+        face = shot; try { localStorage.setItem('tg_face', face); } catch (e) { }
+        screen = afterCam; render(); if (screen === 'browse') connect(() => send({ action: 'list' }));
+      };
+      document.getElementById('again').onclick = () => renderCamera();
+      return;
+    }
+    app.innerHTML = `${brand}<h2 class="st-title">Take your picture</h2>
+      <div class="cam"><video id="vid" playsinline autoplay muted></video>${guide}<div class="camhint" id="camhint">Fit your head in the oval</div></div>
+      <button id="snap" disabled>📸 Take picture</button>
+      <label class="filebtn">Use a photo instead<input type="file" id="file" accept="image/*" capture="user" hidden></label>
+      <button class="secondary small" id="back">← Back</button>`;
+    const vid = document.getElementById('vid'), snap = document.getElementById('snap'), hint = document.getElementById('camhint');
+    const fail = () => { hint.textContent = 'Camera not available — tap "Use a photo instead"'; hint.classList.add('warn'); };
+    stopCam();
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+        .then((st) => { if (screen !== 'camera') { st.getTracks().forEach((t) => t.stop()); return; } cam = st; vid.srcObject = st; vid.onloadedmetadata = () => { snap.disabled = false; }; })
+        .catch(fail);
+    } else fail();
+    snap.onclick = () => { if (!vid.videoWidth) return; Sfx.play('shutter'); const d = cropHead(vid, vid.videoWidth, vid.videoHeight, true); stopCam(); renderCamera(d); };
+    document.getElementById('file').onchange = (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const im = new Image(); im.onload = () => { const d = cropHead(im, im.naturalWidth, im.naturalHeight, false); URL.revokeObjectURL(im.src); stopCam(); renderCamera(d); };
+      im.src = URL.createObjectURL(f);
+    };
+    document.getElementById('back').onclick = () => { stopCam(); screen = 'home'; render(); };
+  }
 
   function stopLive() { if (live) { live.stop(); live = null; } }
 
   // Shared intro for every mini game: big 3, 2, 1, GO! with a voice and a beep on each.
   function renderCountdown() {
     const g = S.mini;
-    new Image().src = '/img/mole.png';                    // warm the cache before the game starts
+    S.players.forEach((pl) => { if (pl.av) new Image().src = `/avatar/${pl.av}.jpg`; });   // warm the cache before the game starts
     app.innerHTML = `${brand}
       <div class="muted">Game ${g.index + 1} / ${g.total}</div>
       <div class="card cd-card"><div class="cd-icon">${g.icon}</div><h2>${esc(g.name)}</h2><p>${esc(g.how)}</p></div>
@@ -83,6 +139,7 @@
         if (ev.ev === 'spawn') {
           const hole = field.children[ev.cell]; if (!hole) return;
           const el = document.createElement('div'); el.className = 'mole'; el.dataset.id = ev.id;
+          if (ev.av) el.style.backgroundImage = `url(/avatar/${ev.av}.jpg)`;        // a random player's head
           el.addEventListener('pointerdown', (e) => { e.preventDefault(); if (el.classList.contains('tapped')) return; el.classList.add('tapped'); send({ action: 'whack', id: ev.id }); });
           hole.appendChild(el); void el.offsetWidth; el.classList.add('up');
           moles.set(ev.id, { el, timer: setTimeout(() => drop(ev.id, 180), ev.ttl) });
@@ -101,6 +158,61 @@
     };
   }
 
+  // ---- finale: the top three walk in (3rd, 2nd, then 1st), hop onto the podium, and the winner cheers ----
+  function paintDoneCtl() {
+    const c = document.getElementById('donectl'); if (!c) return;
+    c.innerHTML = S.isHost ? '<button id="again">Play again</button>' : '<p class="muted">Waiting for the host…</p>';
+    const b = document.getElementById('again'); if (b) b.onclick = () => send({ action: 'again' });
+  }
+  function renderPodium() {
+    const top = S.players.slice(0, 3);
+    const SHIRT = ['#ffc21a', '#c9d3df', '#d98a4b'], H = [104, 74, 54], X = ['50%', '20%', '80%'], LABEL = ['1st', '2nd', '3rd'];
+    const toon = (pl, i) => `<div class="toon" data-i="${i}" style="--shirt:${SHIRT[i]};left:${i === 2 ? 'calc(100% + 50px)' : '-50px'}"><div class="toon-in">
+        ${faceImg(pl.av, 'thead')}
+        <svg class="tbody" viewBox="0 0 60 64" aria-hidden="true">
+          <g class="leg l"><line x1="25" y1="36" x2="25" y2="57"/><ellipse cx="26.5" cy="60" rx="6" ry="3.5"/></g>
+          <g class="leg r"><line x1="35" y1="36" x2="35" y2="57"/><ellipse cx="36.5" cy="60" rx="6" ry="3.5"/></g>
+          <rect class="torso" x="17" y="4" width="26" height="36" rx="10"/>
+          <g class="arm l"><line x1="18" y1="11" x2="18" y2="36"/><circle cx="18" cy="38" r="4.8"/></g>
+          <g class="arm r"><line x1="42" y1="11" x2="42" y2="36"/><circle cx="42" cy="38" r="4.8"/></g>
+        </svg></div></div>`;
+    app.innerHTML = `${brand}<h2 class="st-title">🏆 Winners</h2>
+      <div class="stage" id="stage">
+        ${[1, 0, 2].filter((i) => top[i]).map((i) => `<div class="block" style="height:${H[i]}px;left:${X[i]}"><b>${LABEL[i]}</b><small>${esc(top[i].name)}</small></div>`).join('')}
+        ${top.map(toon).join('')}
+      </div>
+      <div class="card"><b>Final scores</b>${board(S.players)}</div><div id="donectl"></div>`;
+    paintDoneCtl();
+    const stage = document.getElementById('stage'), timers = [], ivs = [];
+    const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+    let t = 500;
+    [2, 1, 0].filter((i) => top[i]).forEach((i) => {
+      const el = stage.querySelector(`.toon[data-i="${i}"]`), W = i === 0 ? 2000 : 1500;
+      at(t, () => {                                         // walk to the block
+        el.classList.add('walking'); el.style.transition = `left ${W}ms linear`; el.style.left = X[i];
+        const iv = setInterval(() => Sfx.play('step'), 230); ivs.push(iv); setTimeout(() => clearInterval(iv), W);
+      });
+      at(t + W, () => {                                     // hop up onto it
+        el.classList.remove('walking'); el.classList.add('hop');
+        el.style.transition = 'bottom .45s cubic-bezier(.3,1.5,.5,1)'; el.style.bottom = H[i] + 'px';
+      });
+      at(t + W + 420, () => { el.classList.remove('hop'); el.classList.add('on'); Sfx.play('land'); });
+      t += W + 750;
+    });
+    at(t, () => {                                           // the winner throws both hands up and cheers
+      const w = stage.querySelector('.toon[data-i="0"]'); if (w) w.classList.add('cheer');
+      stage.querySelectorAll('.toon:not([data-i="0"])').forEach((e) => e.classList.add('clap'));
+      Sfx.play('win'); Sfx.play('cheer'); if (top[0]) Sfx.say(`${top[0].name} wins!`);
+      const colors = ['#FFE45A', '#FF9A0A', '#3DE0F5', '#ff5c8a', '#7dffa6', '#fff'];
+      for (let k = 0; k < 44; k++) {
+        const c = document.createElement('i'); c.className = 'confetti';
+        c.style.cssText = `left:${Math.random() * 100}%;background:${colors[k % colors.length]};animation-delay:${(Math.random() * 1.6).toFixed(2)}s;animation-duration:${(2 + Math.random() * 1.6).toFixed(2)}s;transform:rotate(${Math.floor(Math.random() * 360)}deg)`;
+        stage.appendChild(c);
+      }
+    });
+    anim = { stop() { timers.forEach(clearTimeout); ivs.forEach(clearInterval); try { speechSynthesis.cancel(); } catch (e) { } } };
+  }
+
   function stopAnim() { if (anim) { anim.stop(); anim = null; } }
 
   // Between-round screen: rows start in last round's order with last round's scores, the scores count up,
@@ -113,6 +225,7 @@
       <div class="board" style="height:${rows.length * ROW}px">${rows.map((r) => `
         <div class="srow ${r.you ? 'me' : ''}" data-name="${esc(r.name)}" style="transform:translateY(${r.from * ROW}px)">
           <div class="rk"><span class="rkn">${r.from + 1}</span></div>
+          ${faceImg(r.av)}
           <div class="nm">${esc(r.name)}${r.you ? ' <small>(you)</small>' : ''}</div>
           <span class="rdy" title="Ready">✓</span>
           <div class="pts"><span class="sc">${r.prev}</span>${r.gained > 0 ? `<span class="gain">+${r.gained}</span>` : ''}</div>
@@ -187,15 +300,22 @@
       if (key === standKey) { updateReady(); return; }
       standKey = key; stopAnim(); return renderStandings();
     }
+    if (S && S.state === 'done') {                       // play the podium cutscene once; later broadcasts only refresh the button
+      if (doneKey === S.code) return paintDoneCtl();
+      standKey = null; stopAnim(); doneKey = S.code; return renderPodium();
+    }
+    doneKey = null;
     standKey = null; stopAnim();
     let h = S ? brand : hero;
+    if (!S && screen === 'camera') return renderCamera();
+    stopCam();
     if (!S && screen === 'mode') {                                   // host picks the game type first
       app.innerHTML = `${brand}<h2 class="st-title">Choose a game</h2>
         <button class="modecard" data-mode="trivia"><span class="mi">🧠</span><span><b>Trivia</b><small>Answer questions. The fastest right answer scores the most.</small></span></button>
         <button class="modecard" data-mode="mini"><span class="mi">🎮</span><span><b>Mini Games</b><small>A series of quick tap challenges, party style.</small></span></button>
         <button class="secondary small" id="back">← Back</button>
         <div class="err">${esc(err)}</div>`;
-      app.querySelectorAll('.modecard').forEach((b) => (b.onclick = () => connect(() => send({ action: 'create', name: hostName, mode: b.dataset.mode }))));
+      app.querySelectorAll('.modecard').forEach((b) => (b.onclick = () => connect(() => send({ action: 'create', name: hostName, mode: b.dataset.mode, avatar: face }))));
       document.getElementById('back').onclick = () => { screen = 'home'; err = ''; render(); };
       return;
     }
@@ -203,29 +323,35 @@
       const MODE = { trivia: ['🧠', 'Trivia'], mini: ['🎮', 'Mini Games'] };
       app.innerHTML = `${brand}<h2 class="st-title">Open games</h2>
         ${games.length ? games.map((g) => `<div class="card game">
-            <div class="gi">${MODE[g.mode][0]}</div>
-            <div class="gt"><b>${esc(g.host)}'s game</b><small>${MODE[g.mode][1]} · ${g.players} player${g.players === 1 ? '' : 's'} waiting</small></div>
+            ${faceImg(g.av, 'mid')}
+            <div class="gt"><b>${esc(g.host)}'s game</b><small>${MODE[g.mode][0]} ${MODE[g.mode][1]} · ${g.players} player${g.players === 1 ? '' : 's'} waiting</small></div>
             <button class="joinbtn" data-id="${esc(g.id)}">Join game</button>
           </div>`).join('') : '<div class="card"><p class="muted">No open games right now.<br>Ask someone to host one — it will appear here automatically.</p></div>'}
         <button class="secondary small" id="back">← Back</button>
         <div class="err">${esc(err)}</div>`;
-      app.querySelectorAll('.joinbtn').forEach((b) => (b.onclick = () => send({ action: 'join', name: hostName, id: b.dataset.id })));
+      app.querySelectorAll('.joinbtn').forEach((b) => (b.onclick = () => send({ action: 'join', name: hostName, id: b.dataset.id, avatar: face })));
       document.getElementById('back').onclick = () => { send({ action: 'unlist' }); screen = 'home'; err = ''; render(); };
       return;
     }
     if (!S) {
       h += `<div class="card">
+        ${face ? `<div class="mepic"><img class="face big" src="${face}" alt="Your picture"><button class="chip small" id="retake">Retake picture</button></div>` : ''}
         <input id="name" placeholder="Your name" maxlength="20" value="${esc(hostName)}">
         <button id="join">Join game</button>
         <button id="create" class="secondary">Host a new game</button>
         <div class="err">${esc(err)}</div></div>`;
       app.innerHTML = h;
-      const go = (to) => {                                           // both paths need a name first
+      const go = (to) => {                                           // both paths need a name, then a picture
         hostName = document.getElementById('name').value.trim();
         if (!hostName) { err = 'Enter a name'; return render(); }
-        err = ''; screen = to; render();
+        try { localStorage.setItem('tg_name', hostName); } catch (e) { }
+        err = '';
+        if (!face) { afterCam = to; screen = 'camera'; return render(); }
+        screen = to; render();
         if (to === 'browse') connect(() => send({ action: 'list' }));
       };
+      const rt = document.getElementById('retake');
+      if (rt) rt.onclick = () => { hostName = document.getElementById('name').value.trim(); afterCam = 'home'; screen = 'camera'; render(); };
       document.getElementById('join').onclick = () => go('browse');
       document.getElementById('create').onclick = () => go('mode');
       return;
@@ -278,9 +404,6 @@
       } else {
         h += `<p class="muted">${S.myChoice !== null ? 'Locked in! Waiting for others…' : 'Tap your answer!'} (${S.players.filter((p) => p.answered).length}/${S.players.length} answered)</p>`;
       }
-    } else if (S.state === 'done') {
-      h += `<div class="card"><h2>🏆 Final scores</h2>${board(S.players)}</div>
-        ${S.isHost ? '<button id="again">Play again</button>' : ''}`;
     }
     h += `<div class="err">${esc(err)}</div>`;
     app.innerHTML = h;

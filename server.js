@@ -1,5 +1,5 @@
 // Tap Genius - authoritative multiplayer trivia server (Node + ws). Rooms live in memory.
-const http = require('http'), fs = require('fs'), path = require('path');
+const http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 80;
 const PUB = path.join(__dirname, 'public');
@@ -44,6 +44,26 @@ function pickQuestions(band, cats, n) {
   for (let i = 0; out.length < n && lists.some((l) => l.length); i++) { const l = lists[i % lists.length]; if (l.length) out.push(l.pop()); }
   return shuffle(out);
 }
+// ---------- player photos: every player takes a head shot before joining ----------
+// Kept in memory only, under a random id, and deleted when the game room closes.
+const AVATARS = new Map();    // id -> JPEG Buffer
+const MAX_AVATAR_CHARS = 40000;
+function saveAvatar(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > MAX_AVATAR_CHARS) return null;
+  const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  if (!m) return null;
+  const buf = Buffer.from(m[1], 'base64');
+  if (buf.length < 200 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) return null;   // must really be a JPEG
+  const id = crypto.randomBytes(8).toString('hex');
+  AVATARS.set(id, buf);
+  return id;
+}
+function closeRoom(room) {
+  clearTimeout(room.timer); clearTimeout(room.spawnTimer);
+  room.avIds.forEach((id) => AVATARS.delete(id));
+  rooms.delete(room.code);
+}
+
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
@@ -54,6 +74,13 @@ const rooms = new Map(); // code -> room
 const srv = http.createServer((req, res) => {
   if (req.url === '/healthz') { res.writeHead(200); return res.end('ok'); }
   let p; try { p = decodeURIComponent(req.url.split('?')[0]); } catch (e) { res.writeHead(400); return res.end(); }
+  const am = /^\/avatar\/([0-9a-f]{16})\.jpg$/.exec(p);
+  if (am) {
+    const buf = AVATARS.get(am[1]);
+    if (!buf) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400' });
+    return res.end(buf);
+  }
   if (p === '/') p = '/index.html';
   const f = path.join(PUB, path.normalize(p));
   if (!f.startsWith(PUB + path.sep)) { res.writeHead(403); return res.end(); }
@@ -75,7 +102,7 @@ const srv = http.createServer((req, res) => {
   });
 });
 
-const wss = new WebSocketServer({ server: srv, maxPayload: 1024 });
+const wss = new WebSocketServer({ server: srv, maxPayload: 48 * 1024 });
 const send = (ws, o) => { if (ws.readyState === 1) ws.send(JSON.stringify(o)); };
 const cleanName = (n) => String(n || '').trim().replace(/\s+/g, ' ').slice(0, 20);
 const newCode = () => {
@@ -86,8 +113,8 @@ const newCode = () => {
 
 function view(room, p) {
   const players = [...room.players].sort((a, b) => b.score - a.score)
-    .map((x) => ({ name: x.name, score: x.score, answered: x.choice !== null }));
-  const v = { type: 'state', state: room.state, code: room.code, isHost: p === room.host, players, you: { name: p.name, score: p.score } };
+    .map((x) => ({ name: x.name, score: x.score, answered: x.choice !== null, av: x.av }));
+  const v = { type: 'state', state: room.state, code: room.code, isHost: p === room.host, players, you: { name: p.name, score: p.score, av: p.av } };
   v.mode = room.mode; v.host = room.host.name;
   v.config = { band: room.band, cats: room.cats };
   if (room.state === 'lobby') {
@@ -116,7 +143,7 @@ function view(room, p) {
 const browsers = new Set();   // sockets currently looking at the list
 const openGames = () => [...rooms.values()].filter((r) => r.state === 'lobby' && r.players.length < MAX_PLAYERS)
   .sort((a, b) => b.created - a.created)
-  .map((r) => ({ id: r.code, host: r.host.name, mode: r.mode, players: r.players.length }));
+  .map((r) => ({ id: r.code, host: r.host.name, av: r.host.av, mode: r.mode, players: r.players.length }));
 let listTimer = null;
 function listChanged() {      // debounced push whenever a lobby opens, fills, starts or closes
   if (listTimer || !browsers.size) return;
@@ -150,7 +177,7 @@ function enterStandings(room) {
   clearTimeout(room.timer);
   const rank = (key) => new Map([...room.players].sort((a, b) => b[key] - a[key]).map((p, i) => [p, i]));  // stable: ties keep join order
   const from = rank('prev'), to = rank('score');
-  room.snap = room.players.map((p) => ({ name: p.name, prev: p.prev, score: p.score, gained: p.gained, from: from.get(p), to: to.get(p) }))
+  room.snap = room.players.map((p) => ({ name: p.name, av: p.av, prev: p.prev, score: p.score, gained: p.gained, from: from.get(p), to: to.get(p) }))
     .sort((a, b) => a.from - b.from);
   room.isLast = room.qIndex + 1 >= room.order.length;
   room.state = 'standings';
@@ -186,7 +213,8 @@ function spawnMoles(room) {
   for (let i = 0; i < n && free.length; i++) {
     const id = ++room.moleSeq, cell = free.pop();
     room.moles.set(id, { cell, exp: now + ttl, hit: false });
-    emit(room, { ev: 'spawn', id, cell, ttl });
+    const who = room.players[Math.floor(Math.random() * room.players.length)];   // whose head pops up
+    emit(room, { ev: 'spawn', id, cell, ttl, av: who.av });
   }
   const gap = Math.round(1050 - 600 * f);                                   // next pop after 1.05s -> 0.45s
   if (now + gap < room.playStart + g.ms - 200) room.spawnTimer = setTimeout(() => spawnMoles(room), gap);
@@ -211,7 +239,7 @@ function advance(room) {
 function removePlayer(ws) {
   const room = ws.room; if (!room) return;
   room.players = room.players.filter((p) => p.ws !== ws); ws.room = null;
-  if (!room.players.length) { clearTimeout(room.timer); clearTimeout(room.spawnTimer); rooms.delete(room.code); listChanged(); return; }
+  if (!room.players.length) { closeRoom(room); listChanged(); return; }
   if (room.host.ws === ws) room.host = room.players[0];
   if (room.state === 'question' && room.players.every((p) => p.choice !== null)) return reveal(room);
   if (checkAllReady(room)) return;       // the player we were waiting on left
@@ -223,8 +251,9 @@ const ACTIONS = {
     const name = cleanName(m.name); if (!name) return err(ws, 'Enter a name');
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
-    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now() };
-    const p = { ws, name, score: 0, prev: 0, choice: null, gained: 0 };
+    const av = saveAvatar(m.avatar); if (!av) return err(ws, 'Take your picture first');
+    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av] };
+    const p = { ws, name, av, score: 0, prev: 0, choice: null, gained: 0 };
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room); browsers.delete(ws);
     broadcast(room);
   },
@@ -236,7 +265,9 @@ const ACTIONS = {
     if (room.state !== 'lobby') return err(ws, 'Game already started');
     if (room.players.length >= MAX_PLAYERS) return err(ws, 'Room is full');
     if (room.players.some((x) => x.name.toLowerCase() === name.toLowerCase())) return err(ws, 'Name already taken');
-    const p = { ws, name, score: 0, prev: 0, choice: null, gained: 0 };
+    const av = saveAvatar(m.avatar); if (!av) return err(ws, 'Take your picture first');
+    room.avIds.push(av);
+    const p = { ws, name, av, score: 0, prev: 0, choice: null, gained: 0 };
     room.players.push(p); ws.room = room; ws.player = p; browsers.delete(ws); broadcast(room);
   },
   list(ws) {     // start watching the list of open games
