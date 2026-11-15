@@ -230,8 +230,12 @@
       document.getElementById('create').onclick = () => go('mode');
       return;
     }
+    // lobby title; the host can flip between Trivia and Mini Games here while everyone waits
+    const lobbyHead = () => `<div class="card"><div class="gname">${esc(S.host)}'s game</div>${S.isHost
+      ? `<div class="chips modes">${[['trivia', '🧠 Trivia'], ['mini', '🎮 Mini Games']].map(([m, l]) => `<button class="chip ${S.mode === m ? 'on' : ''}" data-setmode="${m}">${l}</button>`).join('')}</div>`
+      : `<div class="muted">${S.mode === 'mini' ? '🎮 Mini Games' : '🧠 Trivia'}</div>`}</div>`;
     if (S.state === 'lobby' && S.mode === 'mini') {
-      h += `<div class="card"><div class="muted">🎮 Mini Games</div><div class="gname">${esc(S.host)}'s game</div></div>
+      h += `${lobbyHead()}
         <div class="card"><b>🎮 Mini Games</b> <span class="muted">(${S.mini.rounds} rounds)</span>
           <div class="chips">${S.mini.games.map((g) => `<span class="chip on static">${g.icon} ${esc(g.name)}</span>`).join('')}</div></div>
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
@@ -251,7 +255,7 @@
         const picked = cat.cats.filter((c) => cfg.cats.includes(c.id));
         picker = `<div class="card"><b>${esc(band.label)}</b><div class="muted">${picked.length ? picked.map((c) => `${c.icon} ${esc(c.name)}`).join(' · ') : 'Host is picking categories…'}</div></div>`;
       }
-      h += `<div class="card"><div class="muted">🧠 Trivia</div><div class="gname">${esc(S.host)}'s game</div></div>
+      h += `${lobbyHead()}
         ${picker}
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
         ${S.isHost ? `<button id="start" ${cfg.cats.length ? '' : 'disabled'}>Start game</button>${cfg.cats.length ? '' : '<p class="muted">Pick at least one category to start</p>'}` : '<p class="muted">Waiting for host to start…</p>'}`;
@@ -284,6 +288,7 @@
     document.querySelectorAll('.choice').forEach((b) => (b.onclick = () => send({ action: 'answer', choice: +b.dataset.i })));
     const on = (id, a) => { const el = document.getElementById(id); if (el) el.onclick = () => send({ action: a }); };
     on('start', 'start'); on('next', 'next'); on('again', 'again');
+    document.querySelectorAll('[data-setmode]').forEach((b) => (b.onclick = () => { if (b.dataset.setmode !== S.mode) send({ action: 'mode', mode: b.dataset.setmode }); }));
     document.querySelectorAll('[data-band]').forEach((b) => (b.onclick = () => send({ action: 'config', band: b.dataset.band, cats: S.config.cats })));
     document.querySelectorAll('[data-cat]').forEach((b) => (b.onclick = () => {
       const set = new Set(S.config.cats); set.has(b.dataset.cat) ? set.delete(b.dataset.cat) : set.add(b.dataset.cat);

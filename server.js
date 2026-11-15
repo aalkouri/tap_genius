@@ -244,6 +244,11 @@ const ACTIONS = {
     browsers.add(ws); send(ws, { type: 'list', games: openGames() });
   },
   unlist(ws) { browsers.delete(ws); },
+  mode(ws, m) {  // host switches the lobby between Trivia and Mini Games
+    const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
+    if (m.mode !== 'trivia' && m.mode !== 'mini') return;
+    room.mode = m.mode; broadcast(room);
+  },
   config(ws, m) {  // host picks the age range and which categories to play
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
     if (BANDS.includes(m.band)) room.band = m.band;
