@@ -79,6 +79,7 @@ const WORDS = JSON.parse(fs.readFileSync(path.join(__dirname, 'words.json'), 'ut
 const COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
 const MISS_LOCK_MS = 1000, MISS_GRACE_MS = 500;   // empty-square penalty: 1s lockout; only squares with no mole for 0.5s count as empty
 const HOLE_REST_MS = 1500;   // after a mole leaves a hole (whacked or not), that hole stays empty this long
+const HOST_GRACE_MS = +process.env.HOST_GRACE_MS || 15000;   // a host whose connection drops has this long to come back before the game ends
 const GRACE_MS = +process.env.GRACE_MS || 3 * 60 * 1000;   // a player whose connection drops (phone locked, app switched) keeps their seat this long
 const TOKENS = new Map();         // secret session token -> player, so a returning phone can take its seat back
 const here = (room) => room.players.filter((p) => !p.away);
@@ -732,12 +733,18 @@ function dropPlayer(room, p) {       // remove a player for good (they left, or 
   if (room.host === p) room.host = here(room)[0] || room.players[0];
   settle(room);
 }
+// The host is gone: send everyone back to the main screen and close the game.
+function hostGone(room, msg) {
+  const ps = room.players.slice();
+  ps.forEach((p) => { clearTimeout(p.awayTimer); clearTimeout(p.hostTimer); clearTimeout(p.drawerTimer); TOKENS.delete(p.token); send(p.ws, { type: 'left', msg }); if (p.ws && p.ws.player === p) { p.ws.room = null; p.ws.player = null; } });
+  closeRoom(room); listChanged();
+}
 // The connection dropped (phone locked, app switched, signal lost). Keep their seat so they can come straight back.
 function goAway(ws) {
   const room = ws.room, p = ws.player; if (!room || !p || p.ws !== ws) return;
   p.away = true; if (p.rc) p.rc.go = false;
   clearTimeout(p.awayTimer); p.awayTimer = setTimeout(() => { if (p.away) dropPlayer(room, p); }, GRACE_MS);
-  if (room.host === p) p.hostTimer = setTimeout(() => { const n = here(room)[0]; if (p.away && room.host === p && n) { room.host = n; broadcast(room); } }, 20000);   // host gone a while: someone else takes over
+  if (room.host === p) p.hostTimer = setTimeout(() => { if (p.away && room.host === p && rooms.get(room.code) === room) hostGone(room, 'The host disconnected, so the game ended.'); }, HOST_GRACE_MS);   // host gone more than a few seconds: end the game for everyone
   if (room.pic && room.pic.live && room.pic.drawer === p) p.drawerTimer = setTimeout(() => { if (p.away && room.state === 'play' && room.pic && room.pic.live && room.pic.drawer === p) endMini(room); }, 12000);
   settle(room);
 }
@@ -793,6 +800,7 @@ const ACTIONS = {
   ping(ws) { send(ws, { type: 'pong' }); },     // lets a phone that just woke up check that its connection is really alive
   leave(ws) {    // the player chose to leave: free their seat straight away
     const room = ws.room, p = ws.player; if (!room || !p) return;
+    if (room.host === p) return hostGone(room, 'The host left, so the game ended.');
     dropPlayer(room, p); send(ws, { type: 'left' });
   },
   list(ws) {     // start watching the list of open games

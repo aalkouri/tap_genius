@@ -28,7 +28,7 @@
         if (m.expired) return giveUp('Your game has ended, or you were away too long.');
         saveToken(m.token); const was = reconnecting; reconnecting = false; banner(false); if (was && !S) render(); return;
       }
-      if (m.type === 'left') { S = null; saveToken(null); screen = 'home'; err = ''; reconnecting = false; banner(false); try { sock.close(); } catch (x) { } return render(); }
+      if (m.type === 'left') { S = null; saveToken(null); screen = 'home'; err = m.msg || ''; reconnecting = false; banner(false); try { sock.close(); } catch (x) { } return render(); }
       if (m.type === 'error') { err = m.message; Sfx.play('wrong'); } else { const prev = S; S = m; err = ''; sounds(prev, S); }
       render();
     };
