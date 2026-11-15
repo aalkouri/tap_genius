@@ -351,19 +351,51 @@
   // ---- Copy Cat: watch the pads light up in order, then tap the same pattern; the pattern grows every round ----
   function renderCopy() {
     const g = S.mini, me = S.you.name, cars = g.cars, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
-    const ICONS = ['▲', '●', '■', '★'];
+    const ICONS = ['▲', '●', '■', '★'], ROW = 46;
     let alive = new Set(g.alive), phase = 'wait', round = 0, seq = [], got = 0, done = false, raf = 0, limitAt = 0, limitMs = 1;
-    const timers = [];
+    const timers = [], total = {}, fin = {}, lastPos = {};               // total = points this match; fin = who has finished THIS round (rank + points)
+    cars.forEach((c) => { total[c.i] = 0; });
     app.innerHTML = `<div class="timer"><div id="bar"></div></div>
       <div class="hud rchud"><span id="ccstat">Get ready…</span><span id="ccinfo"></span></div>
       <div class="pads" id="pads">${[0, 1, 2, 3].map((i) => `<button class="pad p${i}" data-p="${i}" disabled><span>${ICONS[i]}</span></button>`).join('')}</div>
-      <div class="ccwho" id="ccwho">${cars.map((c) => `<div class="cw" data-i="${c.i}">${faceImg(c.av, 'cwface')}<span class="cwm"></span></div>`).join('')}</div>
+      <div class="cclb-h"><span>Leaderboard</span><span class="muted">this match</span></div>
+      <div class="cclb" id="cclb" style="height:${cars.length * ROW}px">${cars.map((c) => `<div class="srow cc" data-i="${c.i}">
+          <div class="rk"><span class="rkn">–</span></div>${faceImg(c.av, 'cwface')}<div class="nm">${esc(c.name)}${c.i === myId ? ' <small>(you)</small>' : ''}</div>
+          <div class="ccs"></div><div class="pts"><span class="sc">0</span></div></div>`).join('')}</div>
       <div class="ccmsg" id="ccmsg"></div>`;
-    const pads = [...document.querySelectorAll('.pad')], bar = document.getElementById('bar');
+    const pads = [...document.querySelectorAll('.pad')], bar = document.getElementById('bar'), lb = document.getElementById('cclb');
+    const rowEl = new Map([...lb.querySelectorAll('.srow')].map((e) => [+e.dataset.i, e]));
     const stat = (t, cls = '') => { const el = document.getElementById('ccstat'); el.textContent = t; el.className = cls; };
     const canTap = () => phase === 'input' && alive.has(myId) && !done;
     const setPads = () => pads.forEach((b) => { b.disabled = !canTap(); });
-    const mark = () => document.querySelectorAll('.cw').forEach((e) => { const i = +e.dataset.i; e.classList.toggle('out', !alive.has(i)); e.querySelector('.cwm').textContent = !alive.has(i) ? '✕' : e.classList.contains('done') ? '✓' : ''; });
+    // ---- leaderboard: sorted by points this match; rows glide to their new place whenever the scores change
+    function board(first) {
+      const order = [...cars].sort((a, b) => (total[b.i] - total[a.i]) || (a.i - b.i));
+      order.forEach((c, pos) => {
+        const el = rowEl.get(c.i), prev = lastPos[c.i];
+        el.style.transform = `translateY(${pos * ROW}px)`;
+        const rk = el.querySelector('.rkn');
+        if (prev !== pos) {
+          rk.textContent = pos + 1;
+          if (prev !== undefined && !first) {                                        // moved: flip the rank number up or down and flash the row
+            const dir = pos < prev ? 'up' : 'down';
+            rk.classList.remove('flip-up', 'flip-down'); void rk.offsetWidth; rk.classList.add('flip-' + dir);
+            el.classList.remove('moved-up', 'moved-down'); void el.offsetWidth; el.classList.add('moved-' + dir);
+            el.style.zIndex = dir === 'up' ? 3 : 1; setTimeout(() => { el.classList.remove('moved-up', 'moved-down'); el.style.zIndex = ''; }, 1100);
+          }
+          lastPos[c.i] = pos;
+        }
+        el.querySelector('.sc').textContent = total[c.i];
+        el.classList.toggle('me', c.i === myId); el.classList.toggle('leader', pos === 0 && total[c.i] > 0);
+        const s = el.querySelector('.ccs'), f = fin[c.i];
+        if (!alive.has(c.i)) { s.className = 'ccs out'; s.textContent = '✕ out'; }
+        else if (f) { s.className = 'ccs done'; s.innerHTML = `✓ ${ordinal(f.rank)} <b>+${f.pts}</b>`; }
+        else if (phase === 'input') { s.className = 'ccs wait'; s.textContent = '⏳ playing…'; }
+        else { s.className = 'ccs'; s.textContent = ''; }
+        el.classList.toggle('isout', !alive.has(c.i));
+      });
+    }
+    const applyScores = (sc) => { if (sc) cars.forEach((c) => { if (sc[c.i] !== undefined) total[c.i] = sc[c.i]; }); };
     const light = (i, ms) => { const b = pads[i]; if (!b) return; b.classList.add('lit'); Sfx.play('pad', i); timers.push(setTimeout(() => b.classList.remove('lit'), ms)); };
     pads.forEach((b) => b.addEventListener('pointerdown', (e) => {
       e.preventDefault(); if (!canTap()) return; const i = +b.dataset.p;
@@ -371,27 +403,32 @@
     }));
     const frame = (now) => { raf = requestAnimationFrame(frame); bar.style.width = phase === 'input' ? Math.max(0, 100 - ((now - limitAt) / limitMs) * 100) + '%' : '100%'; };
     raf = requestAnimationFrame(frame);
-    const startInput = (limit, startedAt) => { phase = 'input'; limitMs = limit; limitAt = startedAt || performance.now(); setPads(); if (alive.has(myId) && !done) stat(`Your turn! ${got}/${seq.length}`, 'mine'); };
-    mark();
+    const startInput = (limit, startedAt) => { phase = 'input'; limitMs = limit; limitAt = startedAt || performance.now(); setPads(); if (alive.has(myId) && !done) stat(`Your turn! ${got}/${seq.length}`, 'mine'); board(); };
+    board(true);
     live = {
       onEvent(ev) {
         if (ev.ev === 'ccround') {
-          round = ev.r; seq = ev.seq; alive = new Set(ev.alive); got = 0; done = false; phase = 'show'; setPads();
-          document.querySelectorAll('.cw').forEach((e) => e.classList.remove('done')); mark();
+          round = ev.r; seq = ev.seq; alive = new Set(ev.alive); got = 0; done = false; phase = 'show'; applyScores(ev.scores);
+          Object.keys(fin).forEach((k) => delete fin[k]); setPads(); board();
           document.getElementById('ccinfo').textContent = `Round ${round}`; stat(alive.has(myId) ? '👀 Watch the pattern…' : '👀 You\'re out — watch!');
           ev.seq.forEach((pad, k) => timers.push(setTimeout(() => light(pad, ev.step * 0.72), ev.startIn + k * ev.step)));
         } else if (ev.ev === 'ccgo') { startInput(ev.limit); }
         else if (ev.ev === 'ccok') { got = ev.n; stat(`Your turn! ${got}/${seq.length}`, 'mine'); }
-        else if (ev.ev === 'ccdone') { done = true; setPads(); stat('✅ Round complete! Waiting…', 'ok'); Sfx.play('correct'); }
-        else if (ev.ev === 'ccprog') { const e = document.querySelector(`.cw[data-i="${ev.i}"]`); if (e) e.classList.add('done'); mark(); }
+        else if (ev.ev === 'ccdone') { done = true; setPads(); stat(`✅ ${ordinal(ev.rank)} to finish! +${ev.pts}`, 'ok'); Sfx.play(ev.rank === 1 ? 'win' : 'correct'); }
+        else if (ev.ev === 'ccprog') {                                               // someone finished: their points go up and the leaderboard re-sorts live
+          fin[ev.i] = { rank: ev.rank, pts: ev.pts }; total[ev.i] = ev.total; board();
+          if (ev.i !== myId) Sfx.play('pop');
+        }
         else if (ev.ev === 'ccwrong') { Sfx.play('buzzer'); bigX('Wrong!'); }
         else if (ev.ev === 'ccout') {
-          alive.delete(ev.i); mark();
+          alive.delete(ev.i); board();
           if (ev.i === myId) { setPads(); stat("You're out — watch the others!"); if (ev.why === 'slow') { Sfx.play('buzzer'); bigX("Too slow!"); } }
-        } else if (ev.ev === 'ccend') { phase = 'between'; alive = new Set(ev.alive); setPads(); mark(); }
+        } else if (ev.ev === 'ccend') { phase = 'between'; alive = new Set(ev.alive); applyScores(ev.scores); setPads(); board(); }
         else if (ev.ev === 'ccsync') {                                    // we reconnected mid-game
-          round = ev.r; seq = ev.seq; alive = new Set(ev.alive); done = ev.done; got = ev.i; phase = ev.phase; document.getElementById('ccinfo').textContent = `Round ${round}`; mark();
-          if (ev.phase === 'input') startInput(5000); else { setPads(); stat(alive.has(myId) ? '👀 Watch the pattern…' : "You're out — watch the others!"); }
+          round = ev.r; seq = ev.seq; alive = new Set(ev.alive); done = ev.done; got = ev.i; phase = ev.phase; applyScores(ev.scores);
+          Object.keys(fin).forEach((k) => delete fin[k]); (ev.finished || []).forEach((f) => { fin[f.i] = { rank: f.rank, pts: f.pts }; });
+          document.getElementById('ccinfo').textContent = `Round ${round}`;
+          if (ev.phase === 'input') startInput(5000); else { setPads(); board(); stat(alive.has(myId) ? '👀 Watch the pattern…' : "You're out — watch the others!"); }
         }
       },
       stop() { cancelAnimationFrame(raf); timers.forEach(clearTimeout); },

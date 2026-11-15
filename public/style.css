@@ -276,3 +276,19 @@ button.small { padding:9px; font-size:.85rem; }
 .cw { position:relative; } .cw .face.cwface { width:34px; } .cw.out .face { filter:grayscale(1) brightness(.5); } .cw.out { opacity:.6; }
 .cwm { position:absolute; right:-6px; top:-6px; min-width:18px; height:18px; border-radius:50%; font-size:.7rem; font-weight:900; display:flex; align-items:center; justify-content:center; }
 .cw.done .cwm { background:#2ecc71; color:#06331a; } .cw.out .cwm { background:#e74c3c; color:#fff; }
+
+/* ---- Copy Cat leaderboard ---- */
+.pads { max-width:310px; gap:10px; }
+.pad { font-size:2.8rem; border-radius:20px; }
+.cclb-h { display:flex; justify-content:space-between; align-items:baseline; margin:12px 4px 6px; font-weight:800; }
+.cclb { position:relative; }
+.srow.cc { height:42px; padding:0 10px; gap:9px; }
+.srow.cc .face.cwface { width:28px; }
+.srow.cc .rk { width:28px; height:30px; font-size:1.05rem; }
+.srow.cc .nm { font-size:.95rem; }
+.srow.cc .pts { font-size:1.1rem; min-width:34px; }
+.ccs { font-size:.8rem; font-weight:700; white-space:nowrap; opacity:.9; }
+.ccs.wait { color:#ffd35a; animation:pulse .8s ease-in-out infinite alternate; }
+.ccs.done { color:#7dffa6; opacity:1; animation:pop .45s; } .ccs.done b { background:#2ecc71; color:#06331a; border-radius:8px; padding:1px 6px; margin-left:3px; }
+.ccs.out { color:#ff9a9a; }
+.srow.cc.isout { opacity:.5; }

@@ -68,7 +68,7 @@ function closeRoom(room) {
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
-  copy:  { id: 'copy', name: 'Copy Cat', icon: '🎵', how: 'Watch the pattern, then tap it back. One mistake and you are out!', ms: 80000, min: 1 },
+  copy:  { id: 'copy', name: 'Copy Cat', icon: '🎵', how: 'Watch the pattern, then tap it back. The fastest to finish each round scores the most. One mistake and you are out!', ms: 80000, min: 1 },
   pic:   { id: 'pic', name: 'Picture This', icon: '🎨', how: 'One player draws a secret word. Everyone else types guesses — fast guesses score more!', ms: 75000, min: 2 },
   rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs. Wait for the bridges!', ms: 70000 },
 };
@@ -297,19 +297,21 @@ function bombAward(room) { const b = room.bomb; awardPlaces([[...b.alive], ...[.
 // A pattern of coloured pads plays; everyone taps it back. The pattern grows every round; a wrong tap (or being too slow) is out.
 const COPY = { START_LEN: 2, MAX_LEN: 40 };
 function copyInit(room) {
-  room.copy = { seq: Array.from({ length: COPY.MAX_LEN }, () => Math.floor(Math.random() * 4)), round: 0, phase: 'idle', alive: new Set(room.players), started: room.players.length, groups: [], roundOut: [], len: 0, timer: null };
+  room.players.forEach((p) => { p.ccTotal = 0; });                 // points earned in THIS match (added to the player's score when it ends)
+  room.copy = { seq: Array.from({ length: COPY.MAX_LEN }, () => Math.floor(Math.random() * 4)), round: 0, phase: 'idle', alive: new Set(room.players), started: room.players.length, groups: [], roundOut: [], len: 0, timer: null, finished: 0 };
   copyRound(room);
 }
 const copyAliveIdx = (room) => [...room.copy.alive].map((p) => p.idx);
+const copyScores = (room) => Object.fromEntries(room.players.map((p) => [p.idx, p.ccTotal || 0]));
 function copyRound(room) {
   const c = room.copy; if (!c || room.state !== 'play') return;
   [...c.alive].filter((p) => p.away).forEach((p) => { c.alive.delete(p); c.roundOut.push(p); });          // phones that are away cannot play
   if (c.roundOut.length) { c.groups.push(c.roundOut); c.roundOut = []; }
   if (!c.alive.size || (c.started > 1 && c.alive.size <= 1)) return endMini(room);
-  c.round++; c.len = COPY.START_LEN + c.round - 1; c.phase = 'show';
+  c.round++; c.len = COPY.START_LEN + c.round - 1; c.phase = 'show'; c.finished = 0;
   const step = Math.max(340, 720 - c.round * 28), startIn = 900;
   c.alive.forEach((p) => { p.cc = { i: 0, done: false }; });
-  emit(room, { ev: 'ccround', r: c.round, seq: c.seq.slice(0, c.len), step, startIn, alive: copyAliveIdx(room) });
+  emit(room, { ev: 'ccround', r: c.round, seq: c.seq.slice(0, c.len), step, startIn, alive: copyAliveIdx(room), scores: copyScores(room) });
   c.timer = setTimeout(() => copyInput(room), startIn + c.len * step + 250);
 }
 function copyInput(room) {
@@ -322,10 +324,14 @@ function copyEndInput(room) {
   c.phase = 'between'; clearTimeout(c.timer);
   [...c.alive].filter((p) => !p.cc.done).forEach((p) => { c.alive.delete(p); c.roundOut.push(p); emit(room, { ev: 'ccout', i: p.idx, why: 'slow' }); });      // too slow
   if (c.roundOut.length) { c.groups.push(c.roundOut); c.roundOut = []; }
-  emit(room, { ev: 'ccend', r: c.round, alive: copyAliveIdx(room) });
+  emit(room, { ev: 'ccend', r: c.round, alive: copyAliveIdx(room), scores: copyScores(room) });
   c.timer = setTimeout(() => copyRound(room), 1700);
 }
-function copyAward(room) { const c = room.copy; awardPlaces([[...c.alive], ...c.groups.slice().reverse()]); }
+function copyAward(room) {
+  const c = room.copy;
+  if (c.started > 1 && c.alive.size === 1) [...c.alive][0].ccTotal += 5;      // last cat standing bonus
+  room.players.forEach((p) => { p.score += p.ccTotal || 0; });
+}
 
 // ---------- Picture This ----------
 // One player (the drawer) gets a secret word and draws it; strokes are relayed live to everyone else, who type guesses.
@@ -519,7 +525,7 @@ function goAway(ws) {
 // Bring a returning player up to date with things that are not part of the normal state message.
 function resync(room, p) {
   if (room.state === 'play' && room.bomb) send(p.ws, { type: 'ev', ev: 'bstate', holder: room.bomb.holder ? room.bomb.holder.idx : -1, alive: bombIdx(room), n: room.bomb.out.length });
-  if (room.state === 'play' && room.copy && room.copy.phase !== 'idle') { const c = room.copy; send(p.ws, { type: 'ev', ev: 'ccsync', r: c.round, phase: c.phase, seq: c.seq.slice(0, c.len), i: p.cc ? p.cc.i : 0, done: !!(p.cc && p.cc.done), alive: copyAliveIdx(room) }); }
+  if (room.state === 'play' && room.copy && room.copy.phase !== 'idle') { const c = room.copy; send(p.ws, { type: 'ev', ev: 'ccsync', r: c.round, phase: c.phase, seq: c.seq.slice(0, c.len), i: p.cc ? p.cc.i : 0, done: !!(p.cc && p.cc.done), alive: copyAliveIdx(room), scores: copyScores(room), finished: room.players.filter((q) => q.cc && q.cc.done).map((q) => ({ i: q.idx, rank: q.cc.rank, pts: q.cc.pts })) }); }
   if (room.state === 'play' && room.pic && room.pic.live) send(p.ws, { type: 'ev', ev: 'picsync', strokes: room.pic.strokes || [] });
 }
 
@@ -666,7 +672,12 @@ const ACTIONS = {
     const pad = m.pad | 0; if (pad < 0 || pad > 3) return;
     if (pad === c.seq[p.cc.i]) {
       p.cc.i++;
-      if (p.cc.i >= c.len) { p.cc.done = true; send(ws, { type: 'ev', ev: 'ccdone' }); emit(room, { ev: 'ccprog', i: p.idx }); if ([...c.alive].every((q) => q.cc.done)) copyEndInput(room); }
+      if (p.cc.i >= c.len) {
+        p.cc.done = true; p.cc.rank = ++c.finished; p.cc.pts = Math.max(1, 6 - p.cc.rank); p.ccTotal += p.cc.pts;      // 1st to finish 5 pts, 2nd 4, ... everyone else 1
+        send(ws, { type: 'ev', ev: 'ccdone', rank: p.cc.rank, pts: p.cc.pts });
+        emit(room, { ev: 'ccprog', i: p.idx, rank: p.cc.rank, pts: p.cc.pts, total: p.ccTotal });
+        if ([...c.alive].every((q) => q.cc.done)) copyEndInput(room);
+      }
       else send(ws, { type: 'ev', ev: 'ccok', n: p.cc.i });
     } else {
       c.alive.delete(p); c.roundOut.push(p);
