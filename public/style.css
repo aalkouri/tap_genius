@@ -241,3 +241,38 @@ button.small { padding:9px; font-size:.85rem; }
 #reconn { position:fixed; top:0; left:0; right:0; z-index:60; text-align:center; padding:9px; font-weight:800; background:#b36b00; color:#fff; box-shadow:0 3px 8px #0008; animation:pulse 1.2s ease-in-out infinite alternate; }
 @keyframes pulse { from { opacity:.75; } to { opacity:1; } }
 .plist li.away, .srow.away { opacity:.45; }
+
+/* ---- Hot Potato ---- */
+.ring { position:relative; width:min(100%,440px); aspect-ratio:1; margin:6px auto; }
+.bh { position:absolute; transform:translate(-50%,-50%); width:calc(var(--hs) + 14px); margin:0; padding:0; background:none; box-shadow:none; display:flex; flex-direction:column; align-items:center; gap:1px; color:#fff; }
+.bh:active:not(:disabled) { transform:translate(-50%,-50%); box-shadow:none; }
+.bh .face.bface { width:var(--hs); }
+.bn { font-size:.7rem; font-weight:800; text-shadow:0 1px 3px #000, 0 0 4px #000; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bh.me .face { border-color:var(--yellow); }
+.bh.has .face { box-shadow:0 0 0 4px #ff9a0a, 0 0 22px #ff5a1a; }
+.bh.target .face { animation:tpulse .6s ease-in-out infinite alternate; border-color:#7dffa6; cursor:pointer; }
+@keyframes tpulse { from { transform:scale(1); } to { transform:scale(1.1); } }
+.bh.out { opacity:.55; } .bh.out .face { filter:grayscale(1) brightness(.5); } .bh.out::after { content:'💀'; position:absolute; top:6%; font-size:calc(var(--hs) * .5); }
+.bh.boom::before { content:'💥'; position:absolute; top:-10%; font-size:calc(var(--hs) * 1.2); z-index:5; animation:boom 1.1s ease-out forwards; pointer-events:none; }
+@keyframes boom { 0% { transform:scale(.2); opacity:1; } 30% { transform:scale(1.2); opacity:1; } 100% { transform:scale(1.8); opacity:0; } }
+.bomb { position:absolute; width:48px; height:48px; font-size:2.5rem; line-height:1; text-align:center; transform:translate(-50%,-135%); z-index:4; pointer-events:none;
+  transition:left .3s cubic-bezier(.3,1.3,.5,1), top .3s cubic-bezier(.3,1.3,.5,1), opacity .2s; filter:drop-shadow(0 3px 3px #0008); }
+.bomb::after { content:'✨'; position:absolute; right:-6px; top:-8px; font-size:1.1rem; animation:spark .35s steps(2) infinite; }
+@keyframes spark { 50% { opacity:.2; transform:scale(.7); } }
+.bomb.hot { animation:bombhot .11s linear infinite; filter:drop-shadow(0 0 10px #ff2a2a) drop-shadow(0 0 4px #ff2a2a); }
+@keyframes bombhot { 0% { margin-left:-2px; } 50% { margin-left:2px; } 100% { margin-left:-2px; } }
+.bomb.gone { opacity:0; }
+.rmsg { position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); text-align:center; font-weight:900; font-size:1.3rem; text-shadow:0 2px 4px #000; pointer-events:none; padding:0 18%; }
+#bstat.mine { color:#ffd35a; animation:pulse 0.5s ease-in-out infinite alternate; }
+/* ---- Copy Cat ---- */
+.pads { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:12px auto; max-width:400px; }
+.pad { aspect-ratio:1; margin:0; border-radius:24px; font-size:3.6rem; color:rgba(255,255,255,.9); border:4px solid rgba(255,255,255,.4); filter:brightness(.55) saturate(.85); transition:filter .08s, transform .08s, box-shadow .08s; box-shadow:0 6px 0 rgba(0,0,0,.35); touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.pad:disabled { opacity:1; } .pad:not(:disabled) { filter:brightness(.92) saturate(1); }
+.pad.p0 { background:#2ecc71; } .pad.p1 { background:#e74c3c; } .pad.p2 { background:#f1c40f; } .pad.p3 { background:#3498db; }
+.pad.lit { filter:brightness(1.5) saturate(1.3); transform:scale(1.05); box-shadow:0 0 34px 6px rgba(255,255,255,.55), 0 6px 0 rgba(0,0,0,.35); }
+.pad:active:not(:disabled) { transform:scale(.97); box-shadow:0 2px 0 rgba(0,0,0,.35); }
+#ccstat.mine { color:var(--yellow); } #ccstat.ok { color:#7dffa6; }
+.ccwho { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 12px; margin-top:8px; }
+.cw { position:relative; } .cw .face.cwface { width:34px; } .cw.out .face { filter:grayscale(1) brightness(.5); } .cw.out { opacity:.6; }
+.cwm { position:absolute; right:-6px; top:-6px; min-width:18px; height:18px; border-radius:50%; font-size:.7rem; font-weight:900; display:flex; align-items:center; justify-content:center; }
+.cw.done .cwm { background:#2ecc71; color:#06331a; } .cw.out .cwm { background:#e74c3c; color:#fff; }

@@ -59,7 +59,7 @@ function saveAvatar(dataUrl) {
   return id;
 }
 function closeRoom(room) {
-  clearTimeout(room.timer); clearTimeout(room.spawnTimer); clearInterval(room.tick);
+  clearTimeout(room.timer); clearTimeout(room.spawnTimer); clearInterval(room.tick); miniCleanup(room);
   room.avIds.forEach((id) => AVATARS.delete(id));
   rooms.delete(room.code);
 }
@@ -67,6 +67,8 @@ function closeRoom(room) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
+  bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
+  copy:  { id: 'copy', name: 'Copy Cat', icon: '🎵', how: 'Watch the pattern, then tap it back. One mistake and you are out!', ms: 80000, min: 1 },
   pic:   { id: 'pic', name: 'Picture This', icon: '🎨', how: 'One player draws a secret word. Everyone else types guesses — fast guesses score more!', ms: 75000, min: 2 },
   rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs. Wait for the bridges!', ms: 70000 },
 };
@@ -136,6 +138,11 @@ function view(room, p) {
       const me = p === room.pic.drawer;
       v.mini.pic = { drawer: room.pic.drawer.name, you: me, hint: picPattern(room.pic), len: room.pic.word.length };
       if (me) v.mini.pic.word = room.pic.word;
+    }
+    if (g.id === 'bomb' || g.id === 'copy') {
+      v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av }));
+      if (g.id === 'bomb') { v.mini.alive = (room.bomb ? [...room.bomb.alive] : room.players).map((x) => x.idx); v.mini.holder = room.bomb && room.bomb.holder ? room.bomb.holder.idx : -1; }
+      else v.mini.alive = (room.copy ? [...room.copy.alive] : room.players).map((x) => x.idx);
     }
     if (g.id === 'rc' && room.rc) v.mini.rc = { len: RC.LEN, track: room.rc.track, cars: room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av })) };
   }
@@ -207,6 +214,7 @@ function startMini(room) {             // every mini game opens with the same 3-
   room.players.forEach((p, i) => { p.prev = p.score; p.gained = 0; p.idx = i; });
   if ((MINI[room.order[room.qIndex]].min || 1) > room.players.length) room.order[room.qIndex] = 'whack';   // not enough players left for this game
   const gid = room.order[room.qIndex];
+  miniCleanup(room); room.bomb = null; room.copy = null;
   room.rc = gid === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
   room.pic = gid === 'pic' ? picStart(room) : null;            // Picture This: choose the drawer and the word
   broadcast(room);
@@ -226,8 +234,99 @@ function playMini(room) {
     room.spawnTimer = setTimeout(() => spawnMoles(room), 500);
   } else if (g.id === 'rc') rcInit(room);
   else if (g.id === 'pic') picHints(room);
+  else if (g.id === 'bomb') bombInit(room);
+  else if (g.id === 'copy') copyInit(room);
   room.timer = setTimeout(() => endMini(room), g.ms);
 }
+// Points for a finishing order: best place first, ties share the better place's points.
+function awardPlaces(groups) {
+  let pos = 0;
+  for (const g of groups) { if (!g.length) continue; const pts = RC.POINTS[pos] !== undefined ? RC.POINTS[pos] : 1; g.forEach((p) => { p.score += pts; }); pos += g.length; }
+}
+function miniCleanup(room) {          // stop any timers a mini game left running
+  const b = room.bomb; if (b) { clearTimeout(b.fuseTimer); clearTimeout(b.warnTimer); clearTimeout(b.rebomb); }
+  const c = room.copy; if (c) clearTimeout(c.timer);
+}
+
+// ---------- Hot Potato ----------
+// One bomb with a hidden fuse. The holder taps another player to throw it; whoever holds it when it blows is out.
+// A new bomb appears for the survivors until one player is left (or time runs out).
+const BOMB = { FUSE_MIN: 4000, FUSE_MAX: 9000, HOLD_MS: 350, REBOMB_MS: 1800 };
+const bombIdx = (room) => [...room.bomb.alive].map((p) => p.idx);
+function bombInit(room) {
+  room.bomb = { alive: new Set(room.players), out: [], holder: null, from: null, passedAt: 0, fuseTimer: null, warnTimer: null, rebomb: null };
+  bombNew(room);
+}
+function bombNew(room) {
+  const b = room.bomb, ok = [...b.alive].filter((p) => !p.away), pool = ok.length ? ok : [...b.alive];
+  b.holder = pool[Math.floor(Math.random() * pool.length)]; b.from = null; b.passedAt = Date.now();
+  const fuse = BOMB.FUSE_MIN + Math.random() * (BOMB.FUSE_MAX - BOMB.FUSE_MIN);
+  clearTimeout(b.fuseTimer); clearTimeout(b.warnTimer);
+  b.fuseTimer = setTimeout(() => bombBoom(room), fuse);
+  b.warnTimer = setTimeout(() => emit(room, { ev: 'bwarn' }), Math.max(0, fuse - 1800));
+  emit(room, { ev: 'bstate', holder: b.holder.idx, alive: bombIdx(room), n: b.out.length });
+  bombAwayCheck(room);
+}
+function bombAwayCheck(room) {          // a holder whose phone is away cannot throw: the bomb bounces on for them
+  const b = room.bomb; if (!b || !b.holder || !b.holder.away) return;
+  setTimeout(() => {
+    if (room.bomb !== b || room.state !== 'play' || !b.holder || !b.holder.away) return;
+    const c = [...b.alive].filter((p) => p !== b.holder && !p.away); if (c.length) bombTransfer(room, b.holder, c[Math.floor(Math.random() * c.length)]);
+  }, 600);
+}
+function bombTransfer(room, from, to) {
+  const b = room.bomb; b.from = from; b.holder = to; b.passedAt = Date.now();
+  emit(room, { ev: 'bpass', from: from.idx, to: to.idx }); bombAwayCheck(room);
+}
+function bombBoom(room) {
+  const b = room.bomb; if (!b || room.state !== 'play' || !b.holder) return;
+  const h = b.holder; b.alive.delete(h); b.out.push(h); b.holder = null; clearTimeout(b.warnTimer);
+  emit(room, { ev: 'bboom', i: h.idx, left: b.alive.size });
+  if (b.alive.size <= 1) { clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 2400); return; }
+  b.rebomb = setTimeout(() => { if (room.bomb === b && room.state === 'play') bombNew(room); }, BOMB.REBOMB_MS);
+}
+function bombLeft(room, p) {            // a player left for good while the bomb game was running
+  const b = room.bomb; if (!b || !b.alive.has(p)) return;
+  b.alive.delete(p);
+  if (b.alive.size <= 1) { clearTimeout(b.fuseTimer); clearTimeout(b.warnTimer); clearTimeout(b.rebomb); b.holder = null; emit(room, { ev: 'bstate', holder: -1, alive: bombIdx(room), n: b.out.length }); clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1500); return; }
+  if (b.holder === p) bombNew(room); else emit(room, { ev: 'bstate', holder: b.holder ? b.holder.idx : -1, alive: bombIdx(room), n: b.out.length });
+}
+function bombAward(room) { const b = room.bomb; awardPlaces([[...b.alive], ...[...b.out].reverse().map((p) => [p])]); }
+
+// ---------- Copy Cat ----------
+// A pattern of coloured pads plays; everyone taps it back. The pattern grows every round; a wrong tap (or being too slow) is out.
+const COPY = { START_LEN: 2, MAX_LEN: 40 };
+function copyInit(room) {
+  room.copy = { seq: Array.from({ length: COPY.MAX_LEN }, () => Math.floor(Math.random() * 4)), round: 0, phase: 'idle', alive: new Set(room.players), started: room.players.length, groups: [], roundOut: [], len: 0, timer: null };
+  copyRound(room);
+}
+const copyAliveIdx = (room) => [...room.copy.alive].map((p) => p.idx);
+function copyRound(room) {
+  const c = room.copy; if (!c || room.state !== 'play') return;
+  [...c.alive].filter((p) => p.away).forEach((p) => { c.alive.delete(p); c.roundOut.push(p); });          // phones that are away cannot play
+  if (c.roundOut.length) { c.groups.push(c.roundOut); c.roundOut = []; }
+  if (!c.alive.size || (c.started > 1 && c.alive.size <= 1)) return endMini(room);
+  c.round++; c.len = COPY.START_LEN + c.round - 1; c.phase = 'show';
+  const step = Math.max(340, 720 - c.round * 28), startIn = 900;
+  c.alive.forEach((p) => { p.cc = { i: 0, done: false }; });
+  emit(room, { ev: 'ccround', r: c.round, seq: c.seq.slice(0, c.len), step, startIn, alive: copyAliveIdx(room) });
+  c.timer = setTimeout(() => copyInput(room), startIn + c.len * step + 250);
+}
+function copyInput(room) {
+  const c = room.copy; if (!c || room.state !== 'play' || c.phase !== 'show') return;
+  c.phase = 'input'; const limit = 3500 + c.len * 1000;
+  emit(room, { ev: 'ccgo', limit }); c.timer = setTimeout(() => copyEndInput(room), limit);
+}
+function copyEndInput(room) {
+  const c = room.copy; if (!c || c.phase !== 'input') return;
+  c.phase = 'between'; clearTimeout(c.timer);
+  [...c.alive].filter((p) => !p.cc.done).forEach((p) => { c.alive.delete(p); c.roundOut.push(p); emit(room, { ev: 'ccout', i: p.idx, why: 'slow' }); });      // too slow
+  if (c.roundOut.length) { c.groups.push(c.roundOut); c.roundOut = []; }
+  emit(room, { ev: 'ccend', r: c.round, alive: copyAliveIdx(room) });
+  c.timer = setTimeout(() => copyRound(room), 1700);
+}
+function copyAward(room) { const c = room.copy; awardPlaces([[...c.alive], ...c.groups.slice().reverse()]); }
+
 // ---------- Picture This ----------
 // One player (the drawer) gets a secret word and draws it; strokes are relayed live to everyone else, who type guesses.
 // Faster correct guesses earn more, and the drawer earns a share of every correct guess.
@@ -370,6 +469,9 @@ function endMini(room) {
   clearTimeout(room.spawnTimer); clearInterval(room.tick); room.tick = null;
   if (room.rc && room.rc.live) rcAward(room);
   if (room.pic) room.pic.live = false;
+  if (room.bomb) bombAward(room);
+  if (room.copy) copyAward(room);
+  miniCleanup(room);
   room.players.forEach((p) => { p.gained = p.score - p.prev; });
   enterStandings(room);
 }
@@ -400,6 +502,8 @@ function dropPlayer(room, p) {       // remove a player for good (they left, or 
   if (p.ws && p.ws.player === p) { p.ws.room = null; p.ws.player = null; }
   room.players = room.players.filter((x) => x !== p);
   if (!room.players.length) { closeRoom(room); listChanged(); return; }
+  if (room.bomb && room.state === 'play') bombLeft(room, p);
+  if (room.copy && room.copy.alive.delete(p)) room.copy.roundOut.push(p);
   if (room.host === p) room.host = here(room)[0] || room.players[0];
   settle(room);
 }
@@ -414,6 +518,8 @@ function goAway(ws) {
 }
 // Bring a returning player up to date with things that are not part of the normal state message.
 function resync(room, p) {
+  if (room.state === 'play' && room.bomb) send(p.ws, { type: 'ev', ev: 'bstate', holder: room.bomb.holder ? room.bomb.holder.idx : -1, alive: bombIdx(room), n: room.bomb.out.length });
+  if (room.state === 'play' && room.copy && room.copy.phase !== 'idle') { const c = room.copy; send(p.ws, { type: 'ev', ev: 'ccsync', r: c.round, phase: c.phase, seq: c.seq.slice(0, c.len), i: p.cc ? p.cc.i : 0, done: !!(p.cc && p.cc.done), alive: copyAliveIdx(room) }); }
   if (room.state === 'play' && room.pic && room.pic.live) send(p.ws, { type: 'ev', ev: 'picsync', strokes: room.pic.strokes || [] });
 }
 
@@ -546,6 +652,26 @@ const ACTIONS = {
     } else {
       emit(room, { ev: 'picguess', name: p.name, text: raw.slice(0, 24) });
       if (w.length >= 4 && g.length >= 3 && lev1(g, w)) send(ws, { type: 'ev', ev: 'picclose' });
+    }
+  },
+  bpass(ws, m) {    // Hot Potato: the holder throws the bomb to another player
+    const room = ws.room, p = ws.player, b = room && room.bomb; if (!b || room.state !== 'play' || b.holder !== p) return;
+    const to = room.players.find((x) => x.idx === (m.to | 0)); if (!to || to === p || !b.alive.has(to) || to.away) return;
+    const now = Date.now(); if (now - b.passedAt < BOMB.HOLD_MS) return;           // the bomb is too hot to throw back instantly
+    if (to === b.from && b.alive.size > 2) return;                                 // no immediate return to whoever just threw it
+    bombTransfer(room, p, to);
+  },
+  cctap(ws, m) {    // Copy Cat: a pad tapped while the input window is open
+    const room = ws.room, p = ws.player, c = room && room.copy; if (!c || room.state !== 'play' || c.phase !== 'input' || !c.alive.has(p) || p.cc.done) return;
+    const pad = m.pad | 0; if (pad < 0 || pad > 3) return;
+    if (pad === c.seq[p.cc.i]) {
+      p.cc.i++;
+      if (p.cc.i >= c.len) { p.cc.done = true; send(ws, { type: 'ev', ev: 'ccdone' }); emit(room, { ev: 'ccprog', i: p.idx }); if ([...c.alive].every((q) => q.cc.done)) copyEndInput(room); }
+      else send(ws, { type: 'ev', ev: 'ccok', n: p.cc.i });
+    } else {
+      c.alive.delete(p); c.roundOut.push(p);
+      send(ws, { type: 'ev', ev: 'ccwrong' }); emit(room, { ev: 'ccout', i: p.idx, why: 'wrong' });
+      if ([...c.alive].every((q) => q.cc.done)) copyEndInput(room);
     }
   },
   rcgo(ws, m) {    // RC Mayhem: GO button held / released

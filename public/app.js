@@ -300,6 +300,104 @@
     anim = { stop() { timers.forEach(clearTimeout); ivs.forEach(clearInterval); try { speechSynthesis.cancel(); } catch (e) { } } };
   }
 
+  // ---- Hot Potato: players stand in a ring; the holder taps someone to throw them the bomb; whoever holds it when it blows is out ----
+  function renderBomb() {
+    const g = S.mini, me = S.you.name, cars = g.cars, n = cars.length, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
+    let holder = g.holder, alive = new Set(g.alive), from = -1, hot = false, gotAt = 0, tickT = 0;
+    const hs = n <= 6 ? 78 : n <= 9 ? 64 : n <= 14 ? 50 : 38;
+    const posOf = (k) => { const a = (k / n) * Math.PI * 2 - Math.PI / 2; return [50 + 38 * Math.cos(a), 50 + 38 * Math.sin(a)]; };
+    app.innerHTML = `<div class="hud rchud"><span id="bstat"></span><span id="bleft"></span></div>
+      <div class="ring" id="ring" style="--hs:${hs}px">${cars.map((c, k) => { const [x, y] = posOf(k); return `<button class="bh" data-i="${c.i}" style="left:${x}%;top:${y}%">${faceImg(c.av, 'bface')}<span class="bn">${esc(c.name)}</span></button>`; }).join('')}
+        <div class="bomb gone" id="bomb">💣</div><div class="rmsg" id="rmsg"></div></div>`;
+    const ring = document.getElementById('ring'), bomb = document.getElementById('bomb'), heads = [...ring.querySelectorAll('.bh')];
+    const idxPos = new Map(cars.map((c, k) => [c.i, posOf(k)]));
+    const nameOf = (i) => (cars.find((c) => c.i === i) || {}).name || '?';
+    const sync = () => {
+      heads.forEach((h) => { const i = +h.dataset.i; h.classList.toggle('out', !alive.has(i)); h.classList.toggle('me', i === myId); h.classList.toggle('has', i === holder);
+        h.classList.toggle('target', holder === myId && alive.has(i) && i !== myId && !(i === from && alive.size > 2)); });
+      const pos = idxPos.get(holder);
+      if (pos) { bomb.style.left = pos[0] + '%'; bomb.style.top = pos[1] + '%'; bomb.classList.remove('gone'); } else bomb.classList.add('gone');
+      bomb.classList.toggle('hot', hot && holder !== -1);
+      const st = document.getElementById('bstat');
+      st.textContent = !alive.has(myId) ? '💀 You\'re out — watch!' : holder === myId ? '💣 YOU have the bomb! Tap someone!' : holder === -1 ? '…' : `💣 ${nameOf(holder)} has the bomb`;
+      st.classList.toggle('mine', holder === myId && alive.has(myId));
+      document.getElementById('bleft').textContent = `${alive.size} left`;
+    };
+    const tick = () => { if (holder !== -1) Sfx.play('tick'); tickT = setTimeout(tick, hot ? 170 : 520); };    // faster ticking once the fuse is nearly gone
+    sync(); tick();
+    ring.addEventListener('click', (e) => {
+      const h = e.target.closest('.bh'); if (!h || holder !== myId || !alive.has(myId)) return;
+      const i = +h.dataset.i; if (i === myId || !alive.has(i) || Date.now() - gotAt < 360) return;
+      if (i === from && alive.size > 2) { document.getElementById('rmsg').textContent = "Can't throw it straight back!"; setTimeout(() => { document.getElementById('rmsg').textContent = ''; }, 900); return; }
+      send({ action: 'bpass', to: i });
+    });
+    live = {
+      onEvent(ev) {
+        if (ev.ev === 'bstate') { holder = ev.holder; alive = new Set(ev.alive); from = -1; hot = false; gotAt = Date.now(); clearTimeout(tickT); tick(); sync(); if (holder === myId) { Sfx.play('pop'); try { navigator.vibrate && navigator.vibrate(60); } catch (e) { } } }
+        else if (ev.ev === 'bpass') { holder = ev.to; from = ev.from; gotAt = Date.now(); Sfx.play('whoosh'); sync(); if (holder === myId) { Sfx.play('pop'); try { navigator.vibrate && navigator.vibrate(60); } catch (e) { } } }
+        else if (ev.ev === 'bwarn') { hot = true; clearTimeout(tickT); tick(); sync(); }
+        else if (ev.ev === 'bboom') {
+          alive.delete(ev.i); holder = -1; hot = false; Sfx.play('crash'); clearTimeout(tickT);
+          const h = heads.find((x) => +x.dataset.i === ev.i); if (h) { h.classList.add('boom'); setTimeout(() => h.classList.remove('boom'), 1100); }
+          if (ev.i === myId) bigX("💥 BOOM! You're out"); else app.classList.add('shake'), setTimeout(() => app.classList.remove('shake'), 460);
+          sync(); document.getElementById('rmsg').textContent = ev.left > 1 ? `${nameOf(ev.i)} is out!` : '';
+          setTimeout(() => { const r = document.getElementById('rmsg'); if (r) r.textContent = ''; }, 1700);
+        }
+      },
+      stop() { clearTimeout(tickT); },
+    };
+  }
+
+  // ---- Copy Cat: watch the pads light up in order, then tap the same pattern; the pattern grows every round ----
+  function renderCopy() {
+    const g = S.mini, me = S.you.name, cars = g.cars, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
+    const ICONS = ['▲', '●', '■', '★'];
+    let alive = new Set(g.alive), phase = 'wait', round = 0, seq = [], got = 0, done = false, raf = 0, limitAt = 0, limitMs = 1;
+    const timers = [];
+    app.innerHTML = `<div class="timer"><div id="bar"></div></div>
+      <div class="hud rchud"><span id="ccstat">Get ready…</span><span id="ccinfo"></span></div>
+      <div class="pads" id="pads">${[0, 1, 2, 3].map((i) => `<button class="pad p${i}" data-p="${i}" disabled><span>${ICONS[i]}</span></button>`).join('')}</div>
+      <div class="ccwho" id="ccwho">${cars.map((c) => `<div class="cw" data-i="${c.i}">${faceImg(c.av, 'cwface')}<span class="cwm"></span></div>`).join('')}</div>
+      <div class="ccmsg" id="ccmsg"></div>`;
+    const pads = [...document.querySelectorAll('.pad')], bar = document.getElementById('bar');
+    const stat = (t, cls = '') => { const el = document.getElementById('ccstat'); el.textContent = t; el.className = cls; };
+    const canTap = () => phase === 'input' && alive.has(myId) && !done;
+    const setPads = () => pads.forEach((b) => { b.disabled = !canTap(); });
+    const mark = () => document.querySelectorAll('.cw').forEach((e) => { const i = +e.dataset.i; e.classList.toggle('out', !alive.has(i)); e.querySelector('.cwm').textContent = !alive.has(i) ? '✕' : e.classList.contains('done') ? '✓' : ''; });
+    const light = (i, ms) => { const b = pads[i]; if (!b) return; b.classList.add('lit'); Sfx.play('pad', i); timers.push(setTimeout(() => b.classList.remove('lit'), ms)); };
+    pads.forEach((b) => b.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); if (!canTap()) return; const i = +b.dataset.p;
+      light(i, 160); send({ action: 'cctap', pad: i });
+    }));
+    const frame = (now) => { raf = requestAnimationFrame(frame); bar.style.width = phase === 'input' ? Math.max(0, 100 - ((now - limitAt) / limitMs) * 100) + '%' : '100%'; };
+    raf = requestAnimationFrame(frame);
+    const startInput = (limit, startedAt) => { phase = 'input'; limitMs = limit; limitAt = startedAt || performance.now(); setPads(); if (alive.has(myId) && !done) stat(`Your turn! ${got}/${seq.length}`, 'mine'); };
+    mark();
+    live = {
+      onEvent(ev) {
+        if (ev.ev === 'ccround') {
+          round = ev.r; seq = ev.seq; alive = new Set(ev.alive); got = 0; done = false; phase = 'show'; setPads();
+          document.querySelectorAll('.cw').forEach((e) => e.classList.remove('done')); mark();
+          document.getElementById('ccinfo').textContent = `Round ${round}`; stat(alive.has(myId) ? '👀 Watch the pattern…' : '👀 You\'re out — watch!');
+          ev.seq.forEach((pad, k) => timers.push(setTimeout(() => light(pad, ev.step * 0.72), ev.startIn + k * ev.step)));
+        } else if (ev.ev === 'ccgo') { startInput(ev.limit); }
+        else if (ev.ev === 'ccok') { got = ev.n; stat(`Your turn! ${got}/${seq.length}`, 'mine'); }
+        else if (ev.ev === 'ccdone') { done = true; setPads(); stat('✅ Round complete! Waiting…', 'ok'); Sfx.play('correct'); }
+        else if (ev.ev === 'ccprog') { const e = document.querySelector(`.cw[data-i="${ev.i}"]`); if (e) e.classList.add('done'); mark(); }
+        else if (ev.ev === 'ccwrong') { Sfx.play('buzzer'); bigX('Wrong!'); }
+        else if (ev.ev === 'ccout') {
+          alive.delete(ev.i); mark();
+          if (ev.i === myId) { setPads(); stat("You're out — watch the others!"); if (ev.why === 'slow') { Sfx.play('buzzer'); bigX("Too slow!"); } }
+        } else if (ev.ev === 'ccend') { phase = 'between'; alive = new Set(ev.alive); setPads(); mark(); }
+        else if (ev.ev === 'ccsync') {                                    // we reconnected mid-game
+          round = ev.r; seq = ev.seq; alive = new Set(ev.alive); done = ev.done; got = ev.i; phase = ev.phase; document.getElementById('ccinfo').textContent = `Round ${round}`; mark();
+          if (ev.phase === 'input') startInput(5000); else { setPads(); stat(alive.has(myId) ? '👀 Watch the pattern…' : "You're out — watch the others!"); }
+        }
+      },
+      stop() { cancelAnimationFrame(raf); timers.forEach(clearTimeout); },
+    };
+  }
+
   // ---- Picture This: the drawer sketches on a shared white board; everyone else watches live and types guesses ----
   const PAL = ['#1b1b1b', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa', '#6d4c41', '#ffffff'];   // last one is the eraser
   const SIZES = [5, 12, 26];
@@ -687,7 +785,7 @@
       const key = S.state + ':' + S.code + ':' + S.mini.index;
       if (key === liveKey) return;
       liveKey = key; stopLive(); stopAnim(); standKey = null;
-      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : renderPlay();
+      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : S.mini.game === 'bomb' ? renderBomb() : S.mini.game === 'copy' ? renderCopy() : renderPlay();
     }
     liveKey = null; stopLive();
     if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)
