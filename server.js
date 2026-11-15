@@ -3,7 +3,7 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 80;
 const PUB = path.join(__dirname, 'public');
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg' };
 
 const BANDS = ['2-5', '6-10', '11+'];
 const BAND_LABEL = { '2-5': 'Ages 2–5', '6-10': 'Ages 6–10', '11+': 'Ages 11+' };
@@ -49,14 +49,25 @@ const rooms = new Map(); // code -> room
 
 const srv = http.createServer((req, res) => {
   if (req.url === '/healthz') { res.writeHead(200); return res.end('ok'); }
-  let p = decodeURIComponent(req.url.split('?')[0]);
+  let p; try { p = decodeURIComponent(req.url.split('?')[0]); } catch (e) { res.writeHead(400); return res.end(); }
   if (p === '/') p = '/index.html';
   const f = path.join(PUB, path.normalize(p));
   if (!f.startsWith(PUB + path.sep)) { res.writeHead(403); return res.end(); }
-  fs.readFile(f, (e, d) => {
-    if (e) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
-    res.end(d);
+  fs.stat(f, (e, st) => {
+    if (e || !st.isFile()) { res.writeHead(404); return res.end('Not found'); }
+    const ext = path.extname(f);
+    const h = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Accept-Ranges': 'bytes',
+      'Cache-Control': ext === '.m4a' || ext === '.mp3' ? 'public, max-age=86400' : /^\/(img\/|favicon)/.test(p) ? 'public, max-age=3600' : 'no-cache' };
+    // Range support: iOS Safari will not play <audio> from a server that can't serve byte ranges
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (m && (m[1] || m[2])) {
+      let start = m[1] ? +m[1] : Math.max(0, st.size - +m[2]), end = m[1] && m[2] ? Math.min(+m[2], st.size - 1) : st.size - 1;
+      if (start > end || start >= st.size) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
+      res.writeHead(206, { ...h, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+      return fs.createReadStream(f, { start, end }).pipe(res);
+    }
+    res.writeHead(200, { ...h, 'Content-Length': st.size });
+    fs.createReadStream(f).pipe(res);
   });
 });
 

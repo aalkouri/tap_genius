@@ -23,6 +23,18 @@ window.Sfx = (() => {
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + 0.03);
   }
+  // ---- background music: one looping track, quiet under the effects; starts on the first tap ----
+  const music = (() => {
+    let el = null, wanted = false;
+    const play = () => { if (muted || !wanted || document.hidden) return; if (!el) { el = new Audio('/audio/bgmusic.mp3'); el.loop = true; el.volume = 0.28; el.preload = 'auto'; window.__music = el; }
+      const pr = el.play(); if (pr && pr.catch) pr.catch(() => { }); };
+    return {
+      start() { wanted = true; play(); },
+      play, pause() { if (el) el.pause(); },
+    };
+  })();
+  document.addEventListener('visibilitychange', () => (document.hidden ? music.pause() : music.play()));
+
   const N = { C4: 261.6, D4: 293.7, E4: 329.6, G4: 392, A4: 440, C5: 523.3, D5: 587.3, E5: 659.3, G5: 784, A5: 880, C6: 1046.5, E6: 1318.5 };
 
   const SOUNDS = {
@@ -47,14 +59,14 @@ window.Sfx = (() => {
       if (muted || !SOUNDS[name] || !ensure()) return;
       try { SOUNDS[name](arg); } catch (e) { }
     },
-    unlock: ensure,
+    unlock() { ensure(); music.start(); },
     get muted() { return muted; },
     toggle() {
       muted = !muted;
       try { localStorage.setItem('tg_mute', muted ? '1' : '0'); } catch (e) { }
-      if (!muted) { ensure(); SOUNDS.tap(); }
+      if (muted) music.pause(); else { ensure(); music.start(); SOUNDS.tap(); }
       return muted;
     },
   };
 })();
-document.addEventListener('pointerdown', () => window.Sfx.unlock(), { passive: true });
+document.addEventListener('pointerdown', () => window.Sfx.unlock(), { passive: true });   // first tap unlocks audio + starts the music
