@@ -138,7 +138,7 @@
       <div class="hud"><span id="myhits">You: 0</span><span id="lead"></span></div>
       <div class="field" id="field">${Array.from({ length: g.cells }, (_, i) => `<div class="hole" data-cell="${i}"><div class="mound"></div><div class="pit"></div><div class="burrow"></div></div>`).join('')}</div>`;
     const field = document.getElementById('field'), bar = document.getElementById('bar');
-    const moles = new Map(), hits = {}, t0 = Date.now();
+    const moles = new Map(), hits = {}, done = new Set(), t0 = Date.now();
     const barTimer = setInterval(() => { bar.style.width = Math.max(0, 100 - ((Date.now() - t0) / g.ms) * 100) + '%'; }, 100);
     const drop = (id, delay) => { const m = moles.get(id); if (!m) return; moles.delete(id); clearTimeout(m.timer); m.el.classList.remove('up'); setTimeout(() => m.el.remove(), delay); };
     const hud = () => {
@@ -157,7 +157,8 @@
           moles.set(ev.id, { el, timer: setTimeout(() => drop(ev.id, 180), ev.ttl) });
           Sfx.play('pop');
         } else if (ev.ev === 'hit') {
-          hits[ev.by] = (hits[ev.by] || 0) + 1; hud();
+          if (done.has(ev.id)) return; done.add(ev.id);                     // never count a mole twice
+          hits[ev.by] = ev.n !== undefined ? ev.n : (hits[ev.by] || 0) + 1; hud();   // show the server's count
           const mine = ev.by === me; Sfx.play(mine ? 'mine' : 'bonk');
           const m = moles.get(ev.id); if (!m) return;
           m.el.classList.add('bonked', mine ? 'mine' : 'theirs');
