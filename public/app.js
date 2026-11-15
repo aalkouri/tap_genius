@@ -118,13 +118,25 @@
     live = { stop() { timers.forEach(clearTimeout); try { speechSynthesis.cancel(); } catch (e) { } } };
   }
 
+  // A furry mole drawn in SVG (jagged outline = fur). The player's photo is laid over the face area.
+  const furPath = (cx, cy, rx, ry, n) => { let d = ''; for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2, k = i % 2 ? 1.08 : 0.95; d += (i ? 'L' : 'M') + (cx + Math.cos(a) * rx * k).toFixed(1) + ' ' + (cy + Math.sin(a) * ry * k).toFixed(1); } return d + 'Z'; };
+  const MOLE_SVG = `<svg class="mfur" viewBox="0 0 100 140" aria-hidden="true">
+      <path d="${furPath(50, 106, 41, 42, 44)}" fill="#6b4226"/>
+      <ellipse cx="50" cy="112" rx="23" ry="27" fill="#b98a5e"/>
+      <circle cx="16" cy="28" r="8" fill="#5a361e"/><circle cx="84" cy="28" r="8" fill="#5a361e"/>
+      <circle cx="16" cy="28" r="4" fill="#e9a9a2"/><circle cx="84" cy="28" r="4" fill="#e9a9a2"/>
+      <path d="${furPath(50, 42, 37, 43, 40)}" fill="#7a4c2b"/>
+      <g fill="#f2b3ac" stroke="#c98a84" stroke-width="1"><ellipse cx="19" cy="95" rx="11" ry="7"/><ellipse cx="81" cy="95" rx="11" ry="7"/></g>
+      <g stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M12 98v5M19 100v5M26 98v5M74 98v5M81 100v5M88 98v5"/></g>
+    </svg>`;
+
   // Whack-a-mole: the server says where each head pops up and who tapped it first; we just draw it.
   function renderPlay() {
     const g = S.mini, me = S.you.name;
     app.innerHTML = `${brand}
       <div class="timer"><div id="bar"></div></div>
       <div class="hud"><span id="myhits">You: 0</span><span id="lead"></span></div>
-      <div class="field" id="field">${Array.from({ length: g.cells }, (_, i) => `<div class="hole" data-cell="${i}"><div class="pit"></div></div>`).join('')}</div>`;
+      <div class="field" id="field">${Array.from({ length: g.cells }, (_, i) => `<div class="hole" data-cell="${i}"><div class="mound"></div><div class="pit"></div><div class="burrow"></div></div>`).join('')}</div>`;
     const field = document.getElementById('field'), bar = document.getElementById('bar');
     const moles = new Map(), hits = {}, t0 = Date.now();
     const barTimer = setInterval(() => { bar.style.width = Math.max(0, 100 - ((Date.now() - t0) / g.ms) * 100) + '%'; }, 100);
@@ -139,9 +151,9 @@
         if (ev.ev === 'spawn') {
           const hole = field.children[ev.cell]; if (!hole) return;
           const el = document.createElement('div'); el.className = 'mole'; el.dataset.id = ev.id;
-          if (ev.av) el.style.backgroundImage = `url(/avatar/${ev.av}.jpg)`;        // a random player's head
+          el.innerHTML = `${MOLE_SVG}<div class="mface"${ev.av ? ` style="background-image:url(/avatar/${ev.av}.jpg)"` : ''}></div>`;   // a random player's head
           el.addEventListener('pointerdown', (e) => { e.preventDefault(); if (el.classList.contains('tapped')) return; el.classList.add('tapped'); send({ action: 'whack', id: ev.id }); });
-          hole.appendChild(el); void el.offsetWidth; el.classList.add('up');
+          hole.querySelector('.burrow').appendChild(el); void el.offsetWidth; el.classList.add('up');
           moles.set(ev.id, { el, timer: setTimeout(() => drop(ev.id, 180), ev.ttl) });
           Sfx.play('pop');
         } else if (ev.ev === 'hit') {
@@ -149,7 +161,7 @@
           const mine = ev.by === me; Sfx.play(mine ? 'mine' : 'bonk');
           const m = moles.get(ev.id); if (!m) return;
           m.el.classList.add('bonked', mine ? 'mine' : 'theirs');
-          const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = mine ? '+1' : ev.by; m.el.parentNode.appendChild(tag);
+          const tag = document.createElement('span'); tag.className = 'tag' + (mine ? ' mine' : ''); tag.textContent = mine ? '+1' : ev.by; m.el.closest('.hole').appendChild(tag);
           setTimeout(() => tag.remove(), 600);
           drop(ev.id, 380);
         }

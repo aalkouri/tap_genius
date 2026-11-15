@@ -97,16 +97,24 @@ button.small { padding:9px; font-size:.85rem; }
 /* ---- mini games: whack-a-mole ---- */
 .hud { display:flex; justify-content:space-between; font-weight:800; margin:10px 2px; font-size:1.1rem; } #myhits { color:var(--yellow); }
 .field { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; touch-action:manipulation; user-select:none; -webkit-user-select:none; }
-.hole { position:relative; aspect-ratio:1; overflow:hidden; border-radius:18px; background:linear-gradient(180deg,#38b24f,#1f7a33); border:1px solid rgba(255,255,255,.18); box-shadow:0 5px 0 rgba(2,18,56,.55); }
-.pit { position:absolute; left:10%; right:10%; bottom:6%; height:24%; border-radius:50%; background:#0b2a14; box-shadow:inset 0 6px 10px #000a; }
-.mole { position:absolute; left:19%; width:62%; aspect-ratio:156/200; bottom:-115%; background:#0b3f93 url(/img/mole.png) center/cover no-repeat; border-radius:50%; border:3px solid #fff; box-shadow:0 3px 8px #0008; transition:bottom .15s ease-out, transform .25s, opacity .3s, filter .2s;
+.hole { position:relative; aspect-ratio:1; overflow:hidden; border-radius:18px; border:1px solid rgba(255,255,255,.18); box-shadow:0 5px 0 rgba(2,18,56,.55);
+  background:radial-gradient(circle at 20% 22%, #55c96a 0 3%, transparent 4%), radial-gradient(circle at 78% 14%, #55c96a 0 2.5%, transparent 3.5%), radial-gradient(circle at 88% 46%, #2a8c3f 0 3%, transparent 4%), linear-gradient(180deg,#3fb856,#237a35); }
+/* dirt mound with a dark opening; the mole is clipped to the opening's lower rim, so it really comes out of the hole */
+.mound { position:absolute; left:2%; width:96%; bottom:3%; height:40%; border-radius:50% 50% 44% 44% / 78% 78% 22% 22%;
+  background:radial-gradient(circle at 18% 62%, #a8774a 0 4%, transparent 5%), radial-gradient(circle at 80% 70%, #5e3a1f 0 4%, transparent 5%), radial-gradient(circle at 50% 88%, #a8774a 0 3%, transparent 4%), linear-gradient(180deg,#9a6a3e,#6f4626 70%,#5a371c);
+  box-shadow:inset 0 -5px 0 #4a2d16, 0 3px 5px #0005; }
+.pit { position:absolute; left:13%; width:74%; bottom:17%; height:20%; border-radius:50%; background:radial-gradient(ellipse at 50% 30%, #000, #24140a); box-shadow:inset 0 5px 8px #000, 0 -2px 0 #b7875a; }
+.burrow { position:absolute; left:13%; width:74%; top:-30%; bottom:17%; overflow:hidden; border-radius:0 0 50% 50% / 0 0 8.8% 8.8%; pointer-events:none; }
+.mole { position:absolute; left:6%; width:88%; aspect-ratio:100/140; bottom:-17%; transform:translateY(112%); transition:transform .16s ease-out, filter .2s; pointer-events:auto;
   cursor:pointer; -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
-.mole.up { bottom:7%; }
-.mole.tapped { transform:scale(.92); }
-.mole.bonked { transform:scale(.7) rotate(-14deg); opacity:.75; pointer-events:none; }
-.mole.bonked.theirs { filter:grayscale(1) brightness(.7); }
-.tag { position:absolute; top:6%; left:50%; transform:translateX(-50%); padding:2px 9px; border-radius:10px; font-weight:900; font-size:.85rem; white-space:nowrap; background:var(--navy); color:#fff; animation:tagup .6s ease-out forwards; pointer-events:none; z-index:2; }
-.mole.mine ~ .tag { background:#2ecc71; color:#06331a; font-size:1.1rem; }
+.mole.up { transform:translateY(0); }
+.mfur { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+.mface { position:absolute; left:23%; width:54%; top:5.5%; aspect-ratio:156/200; border-radius:50%; background:#c89a6b url(/img/bulb.png) center/cover no-repeat; }
+.mole.tapped { transform:translateY(4%) scale(.96); }
+.mole.bonked { transform:translateY(22%) scale(1.04,.82); pointer-events:none; }
+.mole.bonked.theirs { filter:grayscale(1) brightness(.75); }
+.tag { position:absolute; top:4%; left:50%; transform:translateX(-50%); padding:2px 9px; border-radius:10px; font-weight:900; font-size:.85rem; white-space:nowrap; background:var(--navy); color:#fff; animation:tagup .6s ease-out forwards; pointer-events:none; z-index:2; }
+.tag.mine { background:#2ecc71; color:#06331a; font-size:1.1rem; }
 @keyframes tagup { 0% { opacity:0; margin-top:14px; } 25% { opacity:1; } 100% { opacity:0; margin-top:-8px; } }
 
 /* ---- open-games browser + lobby title ---- */
