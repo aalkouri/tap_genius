@@ -74,6 +74,9 @@ const WORDS = JSON.parse(fs.readFileSync(path.join(__dirname, 'words.json'), 'ut
 const MINI_ROUNDS = 3, COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
 const MISS_LOCK_MS = 1000, MISS_GRACE_MS = 500;   // empty-square penalty: 1s lockout; only squares with no mole for 0.5s count as empty
 const HOLE_REST_MS = 1500;   // after a mole leaves a hole (whacked or not), that hole stays empty this long
+const GRACE_MS = +process.env.GRACE_MS || 3 * 60 * 1000;   // a player whose connection drops (phone locked, app switched) keeps their seat this long
+const TOKENS = new Map();         // secret session token -> player, so a returning phone can take its seat back
+const here = (room) => room.players.filter((p) => !p.away);
 const rooms = new Map(); // code -> room
 
 const srv = http.createServer((req, res) => {
@@ -118,7 +121,7 @@ const newCode = () => {
 
 function view(room, p) {
   const players = [...room.players].sort((a, b) => b.score - a.score)
-    .map((x) => ({ name: x.name, score: x.score, answered: x.choice !== null, av: x.av }));
+    .map((x) => ({ name: x.name, score: x.score, answered: x.choice !== null, av: x.av, away: !!x.away }));
   const v = { type: 'state', state: room.state, code: room.code, isHost: p === room.host, players, you: { name: p.name, score: p.score, av: p.av } };
   v.mode = room.mode; v.host = room.host.name;
   v.config = { band: room.band, cats: room.cats };
@@ -153,9 +156,9 @@ function view(room, p) {
 }
 // ---------- game browser: players pick an open game from a live list (no room codes to type) ----------
 const browsers = new Set();   // sockets currently looking at the list
-const openGames = () => [...rooms.values()].filter((r) => r.state === 'lobby' && r.players.length < MAX_PLAYERS)
+const openGames = () => [...rooms.values()].filter((r) => r.state === 'lobby' && r.players.length < MAX_PLAYERS && here(r).length)
   .sort((a, b) => b.created - a.created)
-  .map((r) => ({ id: r.code, host: r.host.name, av: r.host.av, mode: r.mode, players: r.players.length }));
+  .map((r) => ({ id: r.code, host: r.host.name, av: r.host.av, mode: r.mode, players: r.players.filter((p) => !p.away).length }));
 let listTimer = null;
 function listChanged() {      // debounced push whenever a lobby opens, fills, starts or closes
   if (listTimer || !browsers.size) return;
@@ -252,7 +255,7 @@ function picHints(room) {                                                       
   reveal(0.42, () => reveal(0.68));
 }
 function picCheckDone(room) {
-  const guessers = room.players.filter((p) => p !== room.pic.drawer);
+  const guessers = here(room).filter((p) => p !== room.pic.drawer);
   if (guessers.length && guessers.every((p) => p.guessed)) { clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }
 }
 const lev1 = (a, b) => {                                                           // are the two words exactly one edit apart?
@@ -329,7 +332,7 @@ function rcTick(room) {
     cars.push([p.idx, Math.round(c.x), Math.round(c.y), Math.round(c.v), (c.y > 0 ? 1 : 0) | (now < c.stallUntil ? 2 : 0) | (now < c.slowUntil ? 4 : 0) | (c.done ? 8 : 0), Math.max(0, Math.round((c.stallUntil - now) / 100))]);
   }
   emit(room, { ev: 'rc', t, c: cars });
-  if (!room.rcAllDone && room.players.length && room.players.every((p) => p.rc && p.rc.done)) { room.rcAllDone = true; clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }
+  if (!room.rcAllDone && here(room).length && here(room).every((p) => p.rc && p.rc.done)) { room.rcAllDone = true; clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }
 }
 function rcAward(room) {            // points by finishing place; anyone who did not finish is ranked by distance
   const order = room.players.filter((p) => p.rc).sort((a, b) => (b.rc.done - a.rc.done) || (a.rc.done ? a.rc.finT - b.rc.finT : b.rc.x - a.rc.x));
@@ -371,7 +374,7 @@ function endMini(room) {
   enterStandings(room);
 }
 function checkAllReady(room) {
-  if (room.state === 'standings' && room.players.length && room.players.every((p) => p.ready)) { advance(room); return true; }
+  if (room.state === 'standings' && here(room).length && here(room).every((p) => p.ready)) { advance(room); return true; }
   return false;
 }
 function advance(room) {
@@ -381,18 +384,37 @@ function advance(room) {
   room.qIndex++;
   if (room.mode === 'mini') startMini(room); else startQuestion(room);
 }
-function removePlayer(ws) {
-  const room = ws.room; if (!room) return;
-  room.players = room.players.filter((p) => p.ws !== ws); ws.room = null;
-  if (!room.players.length) { closeRoom(room); listChanged(); return; }
-  if (room.host.ws === ws) room.host = room.players[0];
+// A roster change (someone left or went away): can the game carry on without them?
+function settle(room) {
   if (room.state === 'play' && room.pic && room.pic.live) {
-    if (!room.players.includes(room.pic.drawer) || room.players.length < 2) return endMini(room);   // drawer left / nobody left to guess
-    picCheckDone(room);                                  // the player we were waiting on may have been the last non-guesser
+    if (!room.players.includes(room.pic.drawer) || here(room).length < 2) return endMini(room);   // drawer gone / nobody left to guess
+    picCheckDone(room);
   }
-  if (room.state === 'question' && room.players.every((p) => p.choice !== null)) return reveal(room);
-  if (checkAllReady(room)) return;       // the player we were waiting on left
+  if (room.state === 'question' && here(room).length && here(room).every((p) => p.choice !== null)) return reveal(room);
+  if (checkAllReady(room)) return;
   broadcast(room);
+}
+function dropPlayer(room, p) {       // remove a player for good (they left, or were away too long)
+  clearTimeout(p.awayTimer); clearTimeout(p.hostTimer); clearTimeout(p.drawerTimer);
+  TOKENS.delete(p.token);
+  if (p.ws && p.ws.player === p) { p.ws.room = null; p.ws.player = null; }
+  room.players = room.players.filter((x) => x !== p);
+  if (!room.players.length) { closeRoom(room); listChanged(); return; }
+  if (room.host === p) room.host = here(room)[0] || room.players[0];
+  settle(room);
+}
+// The connection dropped (phone locked, app switched, signal lost). Keep their seat so they can come straight back.
+function goAway(ws) {
+  const room = ws.room, p = ws.player; if (!room || !p || p.ws !== ws) return;
+  p.away = true; if (p.rc) p.rc.go = false;
+  clearTimeout(p.awayTimer); p.awayTimer = setTimeout(() => { if (p.away) dropPlayer(room, p); }, GRACE_MS);
+  if (room.host === p) p.hostTimer = setTimeout(() => { const n = here(room)[0]; if (p.away && room.host === p && n) { room.host = n; broadcast(room); } }, 20000);   // host gone a while: someone else takes over
+  if (room.pic && room.pic.live && room.pic.drawer === p) p.drawerTimer = setTimeout(() => { if (p.away && room.state === 'play' && room.pic && room.pic.live && room.pic.drawer === p) endMini(room); }, 12000);
+  settle(room);
+}
+// Bring a returning player up to date with things that are not part of the normal state message.
+function resync(room, p) {
+  if (room.state === 'play' && room.pic && room.pic.live) send(p.ws, { type: 'ev', ev: 'picsync', strokes: room.pic.strokes || [] });
 }
 
 const ACTIONS = {
@@ -402,8 +424,10 @@ const ACTIONS = {
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
     const av = saveAvatar(m.avatar); if (!av) return err(ws, 'Take your picture first');
     const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av] };
-    const p = { ws, name, av, score: 0, prev: 0, choice: null, gained: 0 };
+    const p = { ws, name, av, room, score: 0, prev: 0, choice: null, gained: 0, token: crypto.randomBytes(12).toString('hex') };
+    TOKENS.set(p.token, p);
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room); browsers.delete(ws);
+    send(ws, { type: 'session', token: p.token });
     broadcast(room);
   },
   join(ws, m) {
@@ -416,8 +440,27 @@ const ACTIONS = {
     if (room.players.some((x) => x.name.toLowerCase() === name.toLowerCase())) return err(ws, 'Name already taken');
     const av = saveAvatar(m.avatar); if (!av) return err(ws, 'Take your picture first');
     room.avIds.push(av);
-    const p = { ws, name, av, score: 0, prev: 0, choice: null, gained: 0 };
-    room.players.push(p); ws.room = room; ws.player = p; browsers.delete(ws); broadcast(room);
+    const p = { ws, name, av, room, score: 0, prev: 0, choice: null, gained: 0, token: crypto.randomBytes(12).toString('hex') };
+    TOKENS.set(p.token, p);
+    room.players.push(p); ws.room = room; ws.player = p; browsers.delete(ws);
+    send(ws, { type: 'session', token: p.token });
+    broadcast(room);
+  },
+  resume(ws, m) {  // a phone that lost its connection takes its seat back using its secret token
+    if (ws.room) return;
+    const p = TOKENS.get(String(m.token || '')), room = p && p.room;
+    if (!p || !room || !rooms.has(room.code) || !room.players.includes(p)) return send(ws, { type: 'session', expired: true });
+    if (p.ws && p.ws !== ws) { const old = p.ws; old.player = null; old.room = null; try { old.terminate(); } catch (e) { } }   // same player on a stale socket
+    ws.room = room; ws.player = p; p.ws = ws; p.away = false;
+    clearTimeout(p.awayTimer); clearTimeout(p.hostTimer); clearTimeout(p.drawerTimer);
+    browsers.delete(ws); room.last = Date.now();
+    send(ws, { type: 'session', token: p.token });
+    broadcast(room); resync(room, p);
+  },
+  ping(ws) { send(ws, { type: 'pong' }); },     // lets a phone that just woke up check that its connection is really alive
+  leave(ws) {    // the player chose to leave: free their seat straight away
+    const room = ws.room, p = ws.player; if (!room || !p) return;
+    dropPlayer(room, p); send(ws, { type: 'left' });
   },
   list(ws) {     // start watching the list of open games
     if (ws.room) return;
@@ -453,7 +496,7 @@ const ACTIONS = {
     const room = ws.room, p = ws.player; if (!room || room.state !== 'question' || p.choice !== null) return;
     if (!Number.isInteger(m.choice) || m.choice < 0 || m.choice > 3) return;
     p.choice = m.choice; p.answeredAt = Date.now();
-    if (room.players.every((x) => x.choice !== null)) reveal(room); else broadcast(room);
+    if (here(room).every((x) => x.choice !== null)) reveal(room); else broadcast(room);
   },
   whack(ws, m) {   // whack-a-mole: the first tap on a head scores; later taps on the same head do nothing
     const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.moles) return;
@@ -481,8 +524,11 @@ const ACTIONS = {
       for (let i = 0; i + 1 < raw.length; i += 2) pts.push(Math.max(0, Math.min(1000, raw[i] | 0)), Math.max(0, Math.min(800, raw[i + 1] | 0)));
       if (!pts.length || room.pic.points + pts.length > 60000) return;
       room.pic.points += pts.length;
+      const strokes = room.pic.strokes || (room.pic.strokes = []), sid = m.id | 0;
+      let st = strokes.find((x) => x.id === sid); if (!st) { st = { id: sid, c: Math.max(0, Math.min(9, m.c | 0)), w: Math.max(2, Math.min(48, m.w | 0)), pts: [] }; strokes.push(st); }
+      st.pts.push(...pts);
       msg = { ev: 'pic', op: 'seg', id: m.id | 0, c: Math.max(0, Math.min(9, m.c | 0)), w: Math.max(2, Math.min(48, m.w | 0)), pts };
-    } else if (m.op === 'undo' || m.op === 'clear') msg = { ev: 'pic', op: m.op };
+    } else if (m.op === 'undo' || m.op === 'clear') { msg = { ev: 'pic', op: m.op }; if (m.op === 'clear') room.pic.strokes = []; else if (room.pic.strokes) room.pic.strokes.pop(); }
     else return;
     room.players.forEach((q) => { if (q !== p) send(q.ws, { type: 'ev', ...msg }); });
   },
@@ -534,12 +580,12 @@ wss.on('connection', (ws) => {
     const fn = Object.hasOwn(ACTIONS, m.action) && ACTIONS[m.action];
     if (fn) { if (ws.room) ws.room.last = Date.now(); try { fn(ws, m); } catch (e) { console.error('action failed:', m.action, e.message); } }
   });
-  ws.on('close', () => { browsers.delete(ws); removePlayer(ws); });
+  ws.on('close', () => { browsers.delete(ws); goAway(ws); });
 });
 // Heartbeat (CloudFront drops idle sockets) + idle room cleanup
 setInterval(() => {
   wss.clients.forEach((ws) => { if (!ws.isAlive) return ws.terminate(); ws.isAlive = false; ws.ping(); });
-  rooms.forEach((r) => { if (Date.now() - r.last > ROOM_IDLE_MS) { r.players.forEach((p) => p.ws.terminate()); } });
+  rooms.forEach((r) => { if (Date.now() - r.last > ROOM_IDLE_MS) { r.players.forEach((p) => { clearTimeout(p.awayTimer); TOKENS.delete(p.token); send(p.ws, { type: 'left' }); if (p.ws.player === p) { p.ws.room = null; p.ws.player = null; } }); closeRoom(r); listChanged(); } });
 }, 30000);
 
 srv.listen(PORT, () => console.log('Tap Genius listening on', PORT));

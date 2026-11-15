@@ -236,3 +236,8 @@ button.small { padding:9px; font-size:.85rem; }
 .szb i { display:block; background:#fff; border-radius:50%; }
 .tl { width:auto; margin:0; padding:7px 12px; font-size:.85rem; background:#0d3f94; color:#fff; box-shadow:none; } .tl:active:not(:disabled) { box-shadow:none; transform:none; }
 .reveal { text-align:center; } .revword { font-size:1.9rem; font-weight:900; letter-spacing:.1em; color:var(--yellow); text-shadow:0 3px 0 var(--navy); } .reveal img { width:170px; border-radius:10px; margin-top:6px; border:2px solid #cfd8e8; }
+
+/* ---- reconnecting / away ---- */
+#reconn { position:fixed; top:0; left:0; right:0; z-index:60; text-align:center; padding:9px; font-weight:800; background:#b36b00; color:#fff; box-shadow:0 3px 8px #0008; animation:pulse 1.2s ease-in-out infinite alternate; }
+@keyframes pulse { from { opacity:.75; } to { opacity:1; } }
+.plist li.away, .srow.away { opacity:.45; }

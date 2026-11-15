@@ -8,19 +8,68 @@
   try { face = localStorage.getItem('tg_face'); hostName = localStorage.getItem('tg_name') || ''; } catch (e) { }
   const faceImg = (av, cls = '') => `<img class="face ${cls}" src="${av ? `/avatar/${esc(av)}.jpg` : '/img/bulb.png'}" alt="" onerror="this.style.visibility='hidden'">`;                                                    // open games, pushed live by the server while browsing
 
-  function connect(then) {
-    if (ws && ws.readyState === 1) return then();
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
-    ws.onopen = then;
-    ws.onmessage = (e) => {
+  // ---- connection: if the phone drops the socket (minimised, locked, signal lost) we quietly reconnect and take our seat back ----
+  let token = null, reconnecting = false, retryT = 0, pongOk = true;
+  try { token = localStorage.getItem('tg_sess'); } catch (e) { }
+  const saveToken = (t) => { token = t; try { t ? localStorage.setItem('tg_sess', t) : localStorage.removeItem('tg_sess'); } catch (e) { } };
+  const wsUrl = () => (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  function banner(on) {
+    let el = document.getElementById('reconn');
+    if (!on) { if (el) el.remove(); return; }
+    if (!el) { el = document.createElement('div'); el.id = 'reconn'; el.textContent = '📡 Reconnecting…'; document.body.appendChild(el); }
+  }
+  function attach(sock) {
+    sock.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'ev') { if (live && live.onEvent) live.onEvent(m); return; }   // in-game events never re-render
       if (m.type === 'list') { games = m.games; if (!S && screen === 'browse') render(); return; }
+      if (m.type === 'pong') { pongOk = true; return; }
+      if (m.type === 'session') {
+        if (m.expired) return giveUp('Your game has ended, or you were away too long.');
+        saveToken(m.token); const was = reconnecting; reconnecting = false; banner(false); if (was && !S) render(); return;
+      }
+      if (m.type === 'left') { S = null; saveToken(null); screen = 'home'; err = ''; reconnecting = false; banner(false); try { sock.close(); } catch (x) { } return render(); }
       if (m.type === 'error') { err = m.message; Sfx.play('wrong'); } else { const prev = S; S = m; err = ''; sounds(prev, S); }
       render();
     };
-    ws.onclose = () => { err = 'Disconnected. Reload to rejoin.'; render(); };
+    sock.onclose = () => {
+      if (sock !== ws) return;                                  // an old socket we already replaced
+      if (reconnecting) return;                                 // the retry loop is already handling it
+      if (S && token) { reconnecting = true; banner(true); scheduleRetry(0); }
+      else if (S) { err = 'Disconnected. Reload to rejoin.'; render(); }
+    };
   }
+  function giveUp(message) {                                    // the server no longer has our seat
+    reconnecting = false; clearTimeout(retryT); saveToken(null); banner(false);
+    S = null; screen = 'home'; err = message; stopLive(); stopAnim(); liveKey = null; standKey = null; doneKey = null; render();
+  }
+  function scheduleRetry(n) {
+    clearTimeout(retryT);
+    if (n > (S ? 75 : 10)) return giveUp('Could not reconnect to your game.');   // ~3 minutes in a game (the server holds the seat that long), ~20s on a fresh page load
+    retryT = setTimeout(() => {
+      if (!reconnecting || (ws && ws.readyState === 1)) return;
+      const sock = new WebSocket(wsUrl()); ws = sock; attach(sock);
+      sock.onopen = () => sock.send(JSON.stringify({ action: 'resume', token }));
+      const next = () => { if (sock === ws && reconnecting) scheduleRetry(n + 1); };
+      sock.addEventListener('close', next);
+    }, Math.min(3000, 400 * (n + 1)));
+  }
+  const wake = () => {                                         // tab visible again / network back: is our connection still alive?
+    if (!S || !token) return;
+    if (reconnecting) return scheduleRetry(0);
+    if (!ws || ws.readyState > 1) { reconnecting = true; banner(true); return scheduleRetry(0); }
+    pongOk = false; send({ action: 'ping' });                  // a socket that died while we were away can still look open: test it
+    setTimeout(() => { if (!pongOk && !reconnecting && S) { const dead = ws; reconnecting = true; banner(true); try { dead.close(); } catch (e) { } scheduleRetry(0); } }, 1500);
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+  window.addEventListener('online', wake); window.addEventListener('pageshow', wake); window.addEventListener('focus', wake);
+  function connect(then) {
+    if (ws && ws.readyState === 1) return then();
+    ws = new WebSocket(wsUrl()); attach(ws);
+    ws.onopen = then;
+  }
+  // The page was reloaded (or the browser discarded the tab) while we were in a game: try to take our seat back
+  if (token) { reconnecting = true; scheduleRetry(0); }
   // sound effects for state changes (the standings screen plays its own while animating)
   function sounds(prev, cur) {
     const key = (x) => x.state + ':' + (x.question ? x.question.index : x.round ? x.round.index : '');
@@ -45,7 +94,7 @@
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   const brand = '<div class="brand"><img src="/img/bulb.png" alt=""><span>Tap Genius</span></div>';
   const hero = '<div class="hero"><img src="/img/logo.jpg" alt="Tap Genius"></div><div class="tagline">Tap fast. Think faster!</div>';
-  const board = (players) => `<ol class="plist">${players.map((p) => `<li>${faceImg(p.av)}<span class="pn">${esc(p.name)}</span><span class="ps">${p.score}</span></li>`).join('')}</ol>`;
+  const board = (players) => `<ol class="plist">${players.map((p) => `<li class="${p.away ? 'away' : ''}">${faceImg(p.av)}<span class="pn">${esc(p.name)}${p.away ? ' 💤' : ''}</span><span class="ps">${p.score}</span></li>`).join('')}</ol>`;
 
   // ---- camera: fit your head in the oval, tap, confirm ----
   const OV = { W: 300, H: 400, cx: 150, cy: 150, rx: 78, ry: 100 };     // guide geometry in a 300x400 frame; output keeps the oval's shape
@@ -198,8 +247,9 @@
   // ---- finale: the top three walk in (3rd, 2nd, then 1st), hop onto the podium, and the winner cheers ----
   function paintDoneCtl() {
     const c = document.getElementById('donectl'); if (!c) return;
-    c.innerHTML = S.isHost ? '<button id="again">Play again</button>' : '<p class="muted">Waiting for the host…</p>';
+    c.innerHTML = (S.isHost ? '<button id="again">Play again</button>' : '<p class="muted">Waiting for the host…</p>') + '<button class="secondary small" id="leave2">Leave game</button>';
     const b = document.getElementById('again'); if (b) b.onclick = () => send({ action: 'again' });
+    document.getElementById('leave2').onclick = () => send({ action: 'leave' });
   }
   function renderPodium() {
     const top = S.players.slice(0, 3);
@@ -345,6 +395,10 @@
             const from = st.pts.length; st.pts.push(...ev.pts); line(st, from); penAt(ev.pts[ev.pts.length - 2]);
           } else if (ev.op === 'undo') { const st = strokes.pop(); if (st) byId.delete(st.id); redraw(); }
           else if (ev.op === 'clear') { strokes.length = 0; byId.clear(); redraw(); }
+        } else if (ev.ev === 'picsync') {                      // we (re)connected mid-round: the server sends everything drawn so far
+          strokes.length = 0; byId.clear();
+          for (const st of ev.strokes) { const c = { id: st.id, c: st.c, w: st.w, pts: [...st.pts] }; strokes.push(c); byId.set(c.id, c); seq = Math.max(seq, c.id); }
+          redraw();
         } else if (ev.ev === 'pichint') { if (!isDrawer) { setHint(ev.hint); addFeed('💡 A letter was revealed', 'sys'); } }
         else if (ev.ev === 'picguess') addFeed(`<b>${esc(ev.name)}</b>: ${esc(ev.text)}`);
         else if (ev.ev === 'picok') {
@@ -620,8 +674,9 @@
   function updateReady() {
     if (!S || S.state !== 'standings') return;
     const ready = new Set(S.ready), total = S.standings.length, me = ready.has(S.you.name);
-    app.querySelectorAll('.srow').forEach((el) => el.classList.toggle('isready', ready.has(el.dataset.name)));
-    const c = document.getElementById('rdycount'); if (c) c.textContent = `${S.ready.length} of ${S.standings.length} ready`;
+    const away = new Set(S.players.filter((x) => x.away).map((x) => x.name));
+    app.querySelectorAll('.srow').forEach((el) => { el.classList.toggle('isready', ready.has(el.dataset.name)); el.classList.toggle('away', away.has(el.dataset.name)); });
+    const c = document.getElementById('rdycount'); if (c) c.textContent = `${S.ready.length} of ${S.standings.filter((x) => !away.has(x.name)).length} ready${away.size ? ` · ${away.size} away 💤` : ''}`;
     const b = document.getElementById('ready');
     if (b) { b.disabled = me || !standingsGate(); b.textContent = me ? '✓ Ready — waiting for others…' : 'Ready'; b.classList.toggle('waiting', me); }
   }
@@ -647,6 +702,7 @@
     doneKey = null;
     standKey = null; stopAnim();
     let h = S ? brand : hero;
+    if (!S && reconnecting) { app.innerHTML = `${brand}<div class="card"><p class="muted">📡 Getting you back into your game…</p></div>`; return; }
     if (!S && screen === 'camera') return renderCamera();
     stopCam();
     if (!S && screen === 'mode') {                                   // host picks the game type first
@@ -745,12 +801,13 @@
         h += `<p class="muted">${S.myChoice !== null ? 'Locked in! Waiting for others…' : 'Tap your answer!'} (${S.players.filter((p) => p.answered).length}/${S.players.length} answered)</p>`;
       }
     }
+    if (S.state === 'lobby') h += '<button class="secondary small" id="leave">Leave game</button>';
     h += `<div class="err">${esc(err)}</div>`;
     app.innerHTML = h;
 
     document.querySelectorAll('.choice').forEach((b) => (b.onclick = () => send({ action: 'answer', choice: +b.dataset.i })));
     const on = (id, a) => { const el = document.getElementById(id); if (el) el.onclick = () => send({ action: a }); };
-    on('start', 'start'); on('next', 'next'); on('again', 'again');
+    on('start', 'start'); on('next', 'next'); on('again', 'again'); on('leave', 'leave');
     document.querySelectorAll('[data-setmode]').forEach((b) => (b.onclick = () => { if (b.dataset.setmode !== S.mode) send({ action: 'mode', mode: b.dataset.setmode }); }));
     document.querySelectorAll('[data-band]').forEach((b) => (b.onclick = () => send({ action: 'config', band: b.dataset.band, cats: S.config.cats })));
     document.querySelectorAll('[data-cat]').forEach((b) => (b.onclick = () => {
