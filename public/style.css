@@ -175,8 +175,8 @@ button.small { padding:9px; font-size:.85rem; }
 .cheer .toon-in { animation:jump .4s ease-out infinite alternate; }
 @keyframes jump { from { transform:translateY(0); } to { transform:translateY(-20px); } }
 .clap .arm.l { animation:clapL .28s ease-in-out infinite alternate; } .clap .arm.r { animation:clapR .28s ease-in-out infinite alternate; }
-@keyframes clapL { from { transform:rotate(-38deg); } to { transform:rotate(-62deg); } }
-@keyframes clapR { from { transform:rotate(38deg); } to { transform:rotate(62deg); } }
+@keyframes clapL { from { transform:rotate(26deg); } to { transform:rotate(-26deg); } }   /* hands apart -> palms meet at the centre line (x=30), never crossing */
+@keyframes clapR { from { transform:rotate(-26deg); } to { transform:rotate(26deg); } }
 .confetti { position:absolute; top:-14px; width:8px; height:13px; border-radius:2px; z-index:3; animation:fall linear 2 both; pointer-events:none; }
 @keyframes fall { 0% { top:-14px; opacity:1; } 100% { top:105%; opacity:.9; margin-left:24px; } }
 
