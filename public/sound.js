@@ -45,6 +45,7 @@ window.Sfx = (() => {
     tick:     () => tone(1100, 0, 0.04, 'square', 0.08),
     correct:  () => [N.C5, N.E5, N.G5, N.C6].forEach((f, i) => tone(f, i * 0.08, 0.2, 'triangle', 0.2)),
     wrong:    () => { tone(240, 0, 0.28, 'sawtooth', 0.13, 150); tone(180, 0.12, 0.3, 'sawtooth', 0.11, 110); },
+    buzzer:   () => { [0, 0.01].forEach((t) => { tone(140, t, 0.65, 'sawtooth', 0.2); tone(147, t, 0.65, 'square', 0.12); tone(70, t, 0.65, 'sawtooth', 0.16); }); },  // game-show wrong-answer buzzer
     count:    (p = 0) => tone(500 + 700 * p, 0, 0.05, 'square', 0.06),   // p 0..1 rises as the score counts up
     up:       () => tone(280, 0, 0.32, 'sine', 0.2, 1000),
     down:     () => tone(900, 0, 0.32, 'sine', 0.18, 240),

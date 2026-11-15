@@ -22,9 +22,21 @@
     const key = (x) => x.state + ':' + (x.question ? x.question.index : x.round ? x.round.index : '');
     if (!prev || key(prev) !== key(cur)) {
       if (cur.state === 'question') Sfx.play(prev && prev.state === 'lobby' ? 'start' : 'question');
-      else if (cur.state === 'reveal') Sfx.play(cur.myChoice !== null && cur.myChoice === cur.correct ? 'correct' : 'wrong');
+      else if (cur.state === 'reveal') {
+        if (cur.myChoice !== null && cur.myChoice === cur.correct) Sfx.play('correct');
+        else { Sfx.play('buzzer'); bigX(cur.myChoice === null ? "Time's up!" : 'Wrong!'); }
+      }
       else if (cur.state === 'done') Sfx.play(cur.players[0] && cur.players[0].name === cur.you.name && cur.players[0].score > 0 ? 'win' : 'done');
     } else if (cur.state === 'lobby' && prev.players.length < cur.players.length) Sfx.play('join');
+  }
+  // Wrong answer: a big red X slams over the whole screen (taps pass through it), then fades.
+  function bigX(label) {
+    document.querySelectorAll('.bigx').forEach((e) => e.remove());
+    const el = document.createElement('div'); el.className = 'bigx';
+    el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="8" y1="8" x2="92" y2="92"/><line x1="92" y1="8" x2="8" y2="92"/></svg><span>${esc(label)}</span>`;
+    document.body.appendChild(el);
+    app.classList.remove('shake'); void app.offsetWidth; app.classList.add('shake');
+    setTimeout(() => el.remove(), 1900);
   }
   const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
