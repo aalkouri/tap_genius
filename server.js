@@ -44,6 +44,11 @@ function pickQuestions(band, cats, n) {
   for (let i = 0; out.length < n && lists.some((l) => l.length); i++) { const l = lists[i % lists.length]; if (l.length) out.push(l.pop()); }
   return shuffle(out);
 }
+// ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
+const MINI = {
+  whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
+};
+const MINI_ROUNDS = 3, COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
 const rooms = new Map(); // code -> room
 
 const srv = http.createServer((req, res) => {
@@ -83,8 +88,16 @@ function view(room, p) {
   const players = [...room.players].sort((a, b) => b.score - a.score)
     .map((x) => ({ name: x.name, score: x.score, answered: x.choice !== null }));
   const v = { type: 'state', state: room.state, code: room.code, isHost: p === room.host, players, you: { name: p.name, score: p.score } };
+  v.mode = room.mode;
   v.config = { band: room.band, cats: room.cats };
-  if (room.state === 'lobby') v.catalog = { bands: BANDS.map((id) => ({ id, label: BAND_LABEL[id] })), cats: CATS };
+  if (room.state === 'lobby') {
+    if (room.mode === 'mini') v.mini = { games: Object.values(MINI).map(({ id, name, icon }) => ({ id, name, icon })), rounds: MINI_ROUNDS };
+    else v.catalog = { bands: BANDS.map((id) => ({ id, label: BAND_LABEL[id] })), cats: CATS };
+  }
+  if (room.state === 'countdown' || room.state === 'play') {
+    const g = MINI[room.order[room.qIndex]];
+    v.mini = { game: g.id, name: g.name, icon: g.icon, how: g.how, index: room.qIndex, total: room.order.length, ms: room.state === 'countdown' ? COUNTDOWN_MS : g.ms, cells: CELLS };
+  }
   if (room.state === 'standings') {
     v.standings = room.snap.map((r) => ({ ...r, you: r.name === p.name }));
     v.round = { index: room.qIndex, total: room.order.length };
@@ -134,6 +147,46 @@ function enterStandings(room) {
   room.players.forEach((p) => { p.ready = false; });   // everyone taps Ready before the next question
   broadcast(room);
 }
+// lightweight in-game events (no full state): { type:'ev', ev:'spawn'|'hit', ... }
+const emit = (room, o) => room.players.forEach((p) => send(p.ws, { type: 'ev', ...o }));
+function startMini(room) {             // every mini game opens with the same 3-2-1-GO countdown
+  clearTimeout(room.timer); clearTimeout(room.spawnTimer);
+  room.state = 'countdown';
+  room.players.forEach((p) => { p.prev = p.score; p.gained = 0; });
+  broadcast(room);
+  room.timer = setTimeout(() => playMini(room), COUNTDOWN_MS);
+}
+function playMini(room) {
+  if (room.state !== 'countdown') return;
+  const g = MINI[room.order[room.qIndex]];
+  room.state = 'play'; room.playStart = Date.now(); room.moles = new Map(); room.moleSeq = 0;
+  broadcast(room);
+  room.spawnTimer = setTimeout(() => spawnMoles(room), 500);
+  room.timer = setTimeout(() => endMini(room), g.ms);
+}
+// Whack-a-mole: heads pop faster and stay up for less time as the game goes on; near the end several pop at once.
+function spawnMoles(room) {
+  if (room.state !== 'play') return;
+  const g = MINI.whack, now = Date.now(), f = Math.min(1, (now - room.playStart) / g.ms);
+  for (const [id, m] of room.moles) if (m.hit || now > m.exp + 500) room.moles.delete(id);
+  const ttl = Math.round(1500 - 850 * f);                                   // visible 1.5s -> 0.65s
+  const n = f > 0.85 ? 2 + (Math.random() < 0.5) : f > 0.65 ? 1 + (Math.random() < 0.6) : 1;
+  const busy = new Set([...room.moles.values()].map((m) => m.cell));
+  const free = shuffle([...Array(CELLS).keys()].filter((c) => !busy.has(c)));
+  for (let i = 0; i < n && free.length; i++) {
+    const id = ++room.moleSeq, cell = free.pop();
+    room.moles.set(id, { cell, exp: now + ttl, hit: false });
+    emit(room, { ev: 'spawn', id, cell, ttl });
+  }
+  const gap = Math.round(1050 - 600 * f);                                   // next pop after 1.05s -> 0.45s
+  if (now + gap < room.playStart + g.ms - 200) room.spawnTimer = setTimeout(() => spawnMoles(room), gap);
+}
+function endMini(room) {
+  if (room.state !== 'play') return;
+  clearTimeout(room.spawnTimer);
+  room.players.forEach((p) => { p.gained = p.score - p.prev; });
+  enterStandings(room);
+}
 function checkAllReady(room) {
   if (room.state === 'standings' && room.players.length && room.players.every((p) => p.ready)) { advance(room); return true; }
   return false;
@@ -142,12 +195,13 @@ function advance(room) {
   if (room.state !== 'standings') return;
   clearTimeout(room.timer);
   if (room.isLast) { room.state = 'done'; return broadcast(room); }
-  room.qIndex++; startQuestion(room);
+  room.qIndex++;
+  if (room.mode === 'mini') startMini(room); else startQuestion(room);
 }
 function removePlayer(ws) {
   const room = ws.room; if (!room) return;
   room.players = room.players.filter((p) => p.ws !== ws); ws.room = null;
-  if (!room.players.length) { clearTimeout(room.timer); rooms.delete(room.code); return; }
+  if (!room.players.length) { clearTimeout(room.timer); clearTimeout(room.spawnTimer); rooms.delete(room.code); return; }
   if (room.host.ws === ws) room.host = room.players[0];
   if (room.state === 'question' && room.players.every((p) => p.choice !== null)) return reveal(room);
   if (checkAllReady(room)) return;       // the player we were waiting on left
@@ -159,7 +213,7 @@ const ACTIONS = {
     const name = cleanName(m.name); if (!name) return err(ws, 'Enter a name');
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
-    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'] };
+    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia' };
     const p = { ws, name, score: 0, prev: 0, choice: null, gained: 0 };
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room);
     broadcast(room);
@@ -183,6 +237,11 @@ const ACTIONS = {
   },
   start(ws) {
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
+    if (room.mode === 'mini') {
+      const ids = Object.keys(MINI);
+      room.order = Array.from({ length: MINI_ROUNDS }, () => ids[Math.floor(Math.random() * ids.length)]);
+      room.qIndex = 0; return startMini(room);
+    }
     room.ms = QUESTION_MS[room.band];
     const qs = pickQuestions(room.band, room.cats, ROUNDS);
     if (!qs.length) return err(ws, 'Pick at least one category that has questions for this age range');
@@ -194,6 +253,13 @@ const ACTIONS = {
     if (!Number.isInteger(m.choice) || m.choice < 0 || m.choice > 3) return;
     p.choice = m.choice; p.answeredAt = Date.now();
     if (room.players.every((x) => x.choice !== null)) reveal(room); else broadcast(room);
+  },
+  whack(ws, m) {   // whack-a-mole: the first tap on a head scores; later taps on the same head do nothing
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play') return;
+    const mole = room.moles.get(m.id);
+    if (!mole || mole.hit || Date.now() > mole.exp + 150) return;
+    mole.hit = true; p.score += 1;
+    emit(room, { ev: 'hit', id: m.id, by: p.name });
   },
   ready(ws) {  // standings: this player is ready; the last one to tap starts the next question
     const room = ws.room, p = ws.player; if (!room || room.state !== 'standings' || p.ready) return;

@@ -2,7 +2,7 @@
 // Browsers only allow audio after a tap, so the context is unlocked on the first pointer event.
 window.Sfx = (() => {
   const AC = window.AudioContext || window.webkitAudioContext;
-  let ctx = null, master = null, muted = false;
+  let ctx = null, master = null, muted = false, primed = false;
   try { muted = localStorage.getItem('tg_mute') === '1'; } catch (e) { }
   window.__sfxLog = [];                                   // handy for tests/debugging
 
@@ -50,6 +50,11 @@ window.Sfx = (() => {
     down:     () => tone(900, 0, 0.32, 'sine', 0.18, 240),
     whoosh:   () => tone(400, 0, 0.18, 'sine', 0.08, 700),
     win:      () => { [N.C5, N.E5, N.G5, N.C6].forEach((f, i) => tone(f, i * 0.11, 0.22, 'triangle', 0.22)); [N.G5, N.C6, N.E6].forEach((f, i) => tone(f, 0.5 + i * 0.1, 0.5, 'triangle', 0.2)); },
+    beep:     () => tone(520, 0, 0.16, 'square', 0.13),                                   // 3.. 2.. 1..
+    go:       () => { tone(N.C5, 0, 0.12, 'square', 0.13); tone(N.C6, 0.1, 0.45, 'square', 0.14); },   // GO!
+    pop:      () => tone(320, 0, 0.09, 'sine', 0.12, 640),                                // a head pops up
+    mine:     () => { tone(N.E5, 0, 0.08, 'triangle', 0.22); tone(N.C6, 0.07, 0.14, 'triangle', 0.22); },  // I got it
+    bonk:     () => tone(210, 0, 0.12, 'square', 0.1, 95),                                // someone else got it
     done:     () => [N.G4, N.C5, N.E5, N.G5].forEach((f, i) => tone(f, i * 0.12, 0.25, 'sine', 0.18)),
   };
 
@@ -59,7 +64,18 @@ window.Sfx = (() => {
       if (muted || !SOUNDS[name] || !ensure()) return;
       try { SOUNDS[name](arg); } catch (e) { }
     },
-    unlock() { ensure(); music.start(); },
+    unlock() {
+      ensure(); music.start();
+      if (!primed && window.speechSynthesis) {            // iOS only lets speech start from a tap: prime it silently once
+        primed = true;
+        try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) { }
+      }
+    },
+    say(text) {                                           // spoken countdown ("3", "2", "1", "Go!")
+      window.__sfxLog.push('say:' + text);
+      if (muted || !window.speechSynthesis) return;
+      try { const u = new SpeechSynthesisUtterance(text); u.rate = 1.15; u.pitch = 1.2; u.volume = 1; speechSynthesis.cancel(); speechSynthesis.speak(u); } catch (e) { }
+    },
     get muted() { return muted; },
     toggle() {
       muted = !muted;

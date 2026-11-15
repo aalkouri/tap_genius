@@ -1,6 +1,7 @@
 (() => {
   const app = document.getElementById('app');
   let ws, S = null, err = '', timerId = null, standKey = null, anim = null;
+  let screen = 'home', hostName = '', liveKey = null, live = null;   // home | mode (game-type picker); live = running countdown / mini game
 
   function connect(then) {
     if (ws && ws.readyState === 1) return then();
@@ -8,6 +9,7 @@
     ws.onopen = then;
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
+      if (m.type === 'ev') { if (live && live.onEvent) live.onEvent(m); return; }   // in-game events never re-render
       if (m.type === 'error') { err = m.message; Sfx.play('wrong'); } else { const prev = S; S = m; err = ''; sounds(prev, S); }
       render();
     };
@@ -27,6 +29,63 @@
   const brand = '<div class="brand"><img src="/img/bulb.png" alt=""><span>Tap Genius</span></div>';
   const hero = '<div class="hero"><img src="/img/logo.jpg" alt="Tap Genius"></div><div class="tagline">Tap fast. Think faster!</div>';
   const board = (players) => `<ol>${players.map((p) => `<li>${esc(p.name)}<span>${p.score}</span></li>`).join('')}</ol>`;
+
+  function stopLive() { if (live) { live.stop(); live = null; } }
+
+  // Shared intro for every mini game: big 3, 2, 1, GO! with a voice and a beep on each.
+  function renderCountdown() {
+    const g = S.mini;
+    new Image().src = '/img/mole.png';                    // warm the cache before the game starts
+    app.innerHTML = `${brand}
+      <div class="muted">Game ${g.index + 1} / ${g.total}</div>
+      <div class="card cd-card"><div class="cd-icon">${g.icon}</div><h2>${esc(g.name)}</h2><p>${esc(g.how)}</p></div>
+      <div class="cd-num" id="cdnum"></div>`;
+    const el = document.getElementById('cdnum'), timers = [];
+    ['3', '2', '1', 'GO!'].forEach((t, i) => timers.push(setTimeout(() => {
+      el.textContent = t; el.className = 'cd-num' + (i === 3 ? ' go' : ''); void el.offsetWidth; el.classList.add('pulse');
+      Sfx.say(i === 3 ? 'Go!' : t); Sfx.play(i === 3 ? 'go' : 'beep');
+    }, i * (g.ms / 4))));
+    live = { stop() { timers.forEach(clearTimeout); try { speechSynthesis.cancel(); } catch (e) { } } };
+  }
+
+  // Whack-a-mole: the server says where each head pops up and who tapped it first; we just draw it.
+  function renderPlay() {
+    const g = S.mini, me = S.you.name;
+    app.innerHTML = `${brand}
+      <div class="timer"><div id="bar"></div></div>
+      <div class="hud"><span id="myhits">You: 0</span><span id="lead"></span></div>
+      <div class="field" id="field">${Array.from({ length: g.cells }, (_, i) => `<div class="hole" data-cell="${i}"><div class="pit"></div></div>`).join('')}</div>`;
+    const field = document.getElementById('field'), bar = document.getElementById('bar');
+    const moles = new Map(), hits = {}, t0 = Date.now();
+    const barTimer = setInterval(() => { bar.style.width = Math.max(0, 100 - ((Date.now() - t0) / g.ms) * 100) + '%'; }, 100);
+    const drop = (id, delay) => { const m = moles.get(id); if (!m) return; moles.delete(id); clearTimeout(m.timer); m.el.classList.remove('up'); setTimeout(() => m.el.remove(), delay); };
+    const hud = () => {
+      document.getElementById('myhits').textContent = `You: ${hits[me] || 0}`;
+      const top = Object.entries(hits).sort((a, b) => b[1] - a[1])[0];
+      document.getElementById('lead').textContent = top ? `👑 ${top[0]} ${top[1]}` : '';
+    };
+    live = {
+      onEvent(ev) {
+        if (ev.ev === 'spawn') {
+          const hole = field.children[ev.cell]; if (!hole) return;
+          const el = document.createElement('div'); el.className = 'mole'; el.dataset.id = ev.id;
+          el.addEventListener('pointerdown', (e) => { e.preventDefault(); if (el.classList.contains('tapped')) return; el.classList.add('tapped'); send({ action: 'whack', id: ev.id }); });
+          hole.appendChild(el); void el.offsetWidth; el.classList.add('up');
+          moles.set(ev.id, { el, timer: setTimeout(() => drop(ev.id, 180), ev.ttl) });
+          Sfx.play('pop');
+        } else if (ev.ev === 'hit') {
+          hits[ev.by] = (hits[ev.by] || 0) + 1; hud();
+          const mine = ev.by === me; Sfx.play(mine ? 'mine' : 'bonk');
+          const m = moles.get(ev.id); if (!m) return;
+          m.el.classList.add('bonked', mine ? 'mine' : 'theirs');
+          const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = mine ? '+1' : ev.by; m.el.parentNode.appendChild(tag);
+          setTimeout(() => tag.remove(), 600);
+          drop(ev.id, 380);
+        }
+      },
+      stop() { clearInterval(barTimer); moles.forEach((m) => clearTimeout(m.timer)); moles.clear(); },
+    };
+  }
 
   function stopAnim() { if (anim) { anim.stop(); anim = null; } }
 
@@ -102,6 +161,13 @@
 
   function render() {
     clearInterval(timerId);
+    if (S && (S.state === 'countdown' || S.state === 'play')) {     // set up once; ignore re-broadcasts while it runs
+      const key = S.state + ':' + S.code + ':' + S.mini.index;
+      if (key === liveKey) return;
+      liveKey = key; stopLive(); stopAnim(); standKey = null;
+      return S.state === 'countdown' ? renderCountdown() : renderPlay();
+    }
+    liveKey = null; stopLive();
     if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)
       const key = S.code + ':' + S.round.index;
       if (key === standKey) { updateReady(); return; }
@@ -109,9 +175,19 @@
     }
     standKey = null; stopAnim();
     let h = S ? brand : hero;
+    if (!S && screen === 'mode') {                                   // host picks the game type first
+      app.innerHTML = `${brand}<h2 class="st-title">Choose a game</h2>
+        <button class="modecard" data-mode="trivia"><span class="mi">🧠</span><span><b>Trivia</b><small>Answer questions. The fastest right answer scores the most.</small></span></button>
+        <button class="modecard" data-mode="mini"><span class="mi">🎮</span><span><b>Mini Games</b><small>A series of quick tap challenges, party style.</small></span></button>
+        <button class="secondary small" id="back">← Back</button>
+        <div class="err">${esc(err)}</div>`;
+      app.querySelectorAll('.modecard').forEach((b) => (b.onclick = () => connect(() => send({ action: 'create', name: hostName, mode: b.dataset.mode }))));
+      document.getElementById('back').onclick = () => { screen = 'home'; err = ''; render(); };
+      return;
+    }
     if (!S) {
       h += `<div class="card">
-        <input id="name" placeholder="Your name" maxlength="20">
+        <input id="name" placeholder="Your name" maxlength="20" value="${esc(hostName)}">
         <input id="code" placeholder="Room code (to join)" maxlength="4" style="text-transform:uppercase">
         <button id="join">Join game</button>
         <button id="create" class="secondary">Host a new game</button>
@@ -119,10 +195,20 @@
       app.innerHTML = h;
       const val = (id) => document.getElementById(id).value;
       document.getElementById('join').onclick = () => connect(() => send({ action: 'join', name: val('name'), code: val('code') }));
-      document.getElementById('create').onclick = () => connect(() => send({ action: 'create', name: val('name') }));
+      document.getElementById('create').onclick = () => {
+        hostName = val('name').trim();
+        if (!hostName) { err = 'Enter a name'; return render(); }
+        err = ''; screen = 'mode'; render();
+      };
       return;
     }
-    if (S.state === 'lobby') {
+    if (S.state === 'lobby' && S.mode === 'mini') {
+      h += `<div class="card"><div class="muted">Room code</div><div class="code">${S.code}</div></div>
+        <div class="card"><b>🎮 Mini Games</b> <span class="muted">(${S.mini.rounds} rounds)</span>
+          <div class="chips">${S.mini.games.map((g) => `<span class="chip on static">${g.icon} ${esc(g.name)}</span>`).join('')}</div></div>
+        <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
+        ${S.isHost ? '<button id="start">Start game</button>' : '<p class="muted">Waiting for host to start…</p>'}`;
+    } else if (S.state === 'lobby') {
       const cfg = S.config, cat = S.catalog;
       const band = cat.bands.find((b) => b.id === cfg.band);
       const count = (c) => c.counts[cfg.band];
