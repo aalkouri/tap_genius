@@ -1,7 +1,8 @@
 (() => {
   const app = document.getElementById('app');
   let ws, S = null, err = '', timerId = null, standKey = null, anim = null;
-  let screen = 'home', hostName = '', liveKey = null, live = null;   // home | mode (game-type picker); live = running countdown / mini game
+  let screen = 'home', hostName = '', liveKey = null, live = null;   // home | mode (game-type picker) | browse (open games); live = running countdown / mini game
+  let games = [];                                                    // open games, pushed live by the server while browsing
 
   function connect(then) {
     if (ws && ws.readyState === 1) return then();
@@ -10,6 +11,7 @@
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'ev') { if (live && live.onEvent) live.onEvent(m); return; }   // in-game events never re-render
+      if (m.type === 'list') { games = m.games; if (!S && screen === 'browse') render(); return; }
       if (m.type === 'error') { err = m.message; Sfx.play('wrong'); } else { const prev = S; S = m; err = ''; sounds(prev, S); }
       render();
     };
@@ -185,25 +187,39 @@
       document.getElementById('back').onclick = () => { screen = 'home'; err = ''; render(); };
       return;
     }
+    if (!S && screen === 'browse') {                                 // live list of open games
+      const MODE = { trivia: ['🧠', 'Trivia'], mini: ['🎮', 'Mini Games'] };
+      app.innerHTML = `${brand}<h2 class="st-title">Open games</h2>
+        ${games.length ? games.map((g) => `<div class="card game">
+            <div class="gi">${MODE[g.mode][0]}</div>
+            <div class="gt"><b>${esc(g.host)}'s game</b><small>${MODE[g.mode][1]} · ${g.players} player${g.players === 1 ? '' : 's'} waiting</small></div>
+            <button class="joinbtn" data-id="${esc(g.id)}">Join game</button>
+          </div>`).join('') : '<div class="card"><p class="muted">No open games right now.<br>Ask someone to host one — it will appear here automatically.</p></div>'}
+        <button class="secondary small" id="back">← Back</button>
+        <div class="err">${esc(err)}</div>`;
+      app.querySelectorAll('.joinbtn').forEach((b) => (b.onclick = () => send({ action: 'join', name: hostName, id: b.dataset.id })));
+      document.getElementById('back').onclick = () => { send({ action: 'unlist' }); screen = 'home'; err = ''; render(); };
+      return;
+    }
     if (!S) {
       h += `<div class="card">
         <input id="name" placeholder="Your name" maxlength="20" value="${esc(hostName)}">
-        <input id="code" placeholder="Room code (to join)" maxlength="4" style="text-transform:uppercase">
         <button id="join">Join game</button>
         <button id="create" class="secondary">Host a new game</button>
         <div class="err">${esc(err)}</div></div>`;
       app.innerHTML = h;
-      const val = (id) => document.getElementById(id).value;
-      document.getElementById('join').onclick = () => connect(() => send({ action: 'join', name: val('name'), code: val('code') }));
-      document.getElementById('create').onclick = () => {
-        hostName = val('name').trim();
+      const go = (to) => {                                           // both paths need a name first
+        hostName = document.getElementById('name').value.trim();
         if (!hostName) { err = 'Enter a name'; return render(); }
-        err = ''; screen = 'mode'; render();
+        err = ''; screen = to; render();
+        if (to === 'browse') connect(() => send({ action: 'list' }));
       };
+      document.getElementById('join').onclick = () => go('browse');
+      document.getElementById('create').onclick = () => go('mode');
       return;
     }
     if (S.state === 'lobby' && S.mode === 'mini') {
-      h += `<div class="card"><div class="muted">Room code</div><div class="code">${S.code}</div></div>
+      h += `<div class="card"><div class="muted">🎮 Mini Games</div><div class="gname">${esc(S.host)}'s game</div></div>
         <div class="card"><b>🎮 Mini Games</b> <span class="muted">(${S.mini.rounds} rounds)</span>
           <div class="chips">${S.mini.games.map((g) => `<span class="chip on static">${g.icon} ${esc(g.name)}</span>`).join('')}</div></div>
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
@@ -223,7 +239,7 @@
         const picked = cat.cats.filter((c) => cfg.cats.includes(c.id));
         picker = `<div class="card"><b>${esc(band.label)}</b><div class="muted">${picked.length ? picked.map((c) => `${c.icon} ${esc(c.name)}`).join(' · ') : 'Host is picking categories…'}</div></div>`;
       }
-      h += `<div class="card"><div class="muted">Room code</div><div class="code">${S.code}</div></div>
+      h += `<div class="card"><div class="muted">🧠 Trivia</div><div class="gname">${esc(S.host)}'s game</div></div>
         ${picker}
         <div class="card"><b>Players (${S.players.length})</b>${board(S.players)}</div>
         ${S.isHost ? `<button id="start" ${cfg.cats.length ? '' : 'disabled'}>Start game</button>${cfg.cats.length ? '' : '<p class="muted">Pick at least one category to start</p>'}` : '<p class="muted">Waiting for host to start…</p>'}`;

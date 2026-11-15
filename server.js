@@ -88,7 +88,7 @@ function view(room, p) {
   const players = [...room.players].sort((a, b) => b.score - a.score)
     .map((x) => ({ name: x.name, score: x.score, answered: x.choice !== null }));
   const v = { type: 'state', state: room.state, code: room.code, isHost: p === room.host, players, you: { name: p.name, score: p.score } };
-  v.mode = room.mode;
+  v.mode = room.mode; v.host = room.host.name;
   v.config = { band: room.band, cats: room.cats };
   if (room.state === 'lobby') {
     if (room.mode === 'mini') v.mini = { games: Object.values(MINI).map(({ id, name, icon }) => ({ id, name, icon })), rounds: MINI_ROUNDS };
@@ -112,7 +112,17 @@ function view(room, p) {
   }
   return v;
 }
-const broadcast = (room) => room.players.forEach((p) => send(p.ws, view(room, p)));
+// ---------- game browser: players pick an open game from a live list (no room codes to type) ----------
+const browsers = new Set();   // sockets currently looking at the list
+const openGames = () => [...rooms.values()].filter((r) => r.state === 'lobby' && r.players.length < MAX_PLAYERS)
+  .sort((a, b) => b.created - a.created)
+  .map((r) => ({ id: r.code, host: r.host.name, mode: r.mode, players: r.players.length }));
+let listTimer = null;
+function listChanged() {      // debounced push whenever a lobby opens, fills, starts or closes
+  if (listTimer || !browsers.size) return;
+  listTimer = setTimeout(() => { listTimer = null; const msg = { type: 'list', games: openGames() }; browsers.forEach((ws) => send(ws, msg)); }, 80);
+}
+const broadcast = (room) => { room.players.forEach((p) => send(p.ws, view(room, p))); listChanged(); };
 
 function startQuestion(room) {
   room.state = 'question'; room.startedAt = Date.now(); room.endsAt = room.startedAt + room.ms;
@@ -201,7 +211,7 @@ function advance(room) {
 function removePlayer(ws) {
   const room = ws.room; if (!room) return;
   room.players = room.players.filter((p) => p.ws !== ws); ws.room = null;
-  if (!room.players.length) { clearTimeout(room.timer); clearTimeout(room.spawnTimer); rooms.delete(room.code); return; }
+  if (!room.players.length) { clearTimeout(room.timer); clearTimeout(room.spawnTimer); rooms.delete(room.code); listChanged(); return; }
   if (room.host.ws === ws) room.host = room.players[0];
   if (room.state === 'question' && room.players.every((p) => p.choice !== null)) return reveal(room);
   if (checkAllReady(room)) return;       // the player we were waiting on left
@@ -213,22 +223,27 @@ const ACTIONS = {
     const name = cleanName(m.name); if (!name) return err(ws, 'Enter a name');
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
-    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia' };
+    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now() };
     const p = { ws, name, score: 0, prev: 0, choice: null, gained: 0 };
-    room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room);
+    room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room); browsers.delete(ws);
     broadcast(room);
   },
   join(ws, m) {
     const name = cleanName(m.name); if (!name) return err(ws, 'Enter a name');
     if (ws.room) return;
-    const room = rooms.get(String(m.code || '').toUpperCase().trim());
-    if (!room) return err(ws, 'Room not found');
+    const room = rooms.get(String(m.id || '').toUpperCase().trim());
+    if (!room) return err(ws, 'That game is no longer open');
     if (room.state !== 'lobby') return err(ws, 'Game already started');
     if (room.players.length >= MAX_PLAYERS) return err(ws, 'Room is full');
     if (room.players.some((x) => x.name.toLowerCase() === name.toLowerCase())) return err(ws, 'Name already taken');
     const p = { ws, name, score: 0, prev: 0, choice: null, gained: 0 };
-    room.players.push(p); ws.room = room; ws.player = p; broadcast(room);
+    room.players.push(p); ws.room = room; ws.player = p; browsers.delete(ws); broadcast(room);
   },
+  list(ws) {     // start watching the list of open games
+    if (ws.room) return;
+    browsers.add(ws); send(ws, { type: 'list', games: openGames() });
+  },
+  unlist(ws) { browsers.delete(ws); },
   config(ws, m) {  // host picks the age range and which categories to play
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
     if (BANDS.includes(m.band)) room.band = m.band;
@@ -287,7 +302,7 @@ wss.on('connection', (ws) => {
     const fn = Object.hasOwn(ACTIONS, m.action) && ACTIONS[m.action];
     if (fn) { if (ws.room) ws.room.last = Date.now(); fn(ws, m); }
   });
-  ws.on('close', () => removePlayer(ws));
+  ws.on('close', () => { browsers.delete(ws); removePlayer(ws); });
 });
 // Heartbeat (CloudFront drops idle sockets) + idle room cleanup
 setInterval(() => {
