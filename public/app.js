@@ -24,6 +24,8 @@
   }
   const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const brand = '<div class="brand"><img src="/img/bulb.png" alt=""><span>Tap Genius</span></div>';
+  const hero = '<div class="hero"><img src="/img/logo.jpg" alt="Tap Genius"></div><div class="tagline">Tap fast. Think faster!</div>';
   const board = (players) => `<ol>${players.map((p) => `<li>${esc(p.name)}<span>${p.score}</span></li>`).join('')}</ol>`;
 
   function stopAnim() { if (anim) { anim.stop(); anim = null; } }
@@ -32,7 +34,7 @@
   // then rows glide to their new positions; rank numbers flip up (moved up) or down (moved down).
   function renderStandings() {
     const ROW = 60, rows = S.standings;
-    app.innerHTML = `<h1>⚡ Tap Genius</h1>
+    app.innerHTML = `${brand}
       <div class="muted">Round ${S.round.index + 1} / ${S.round.total}</div>
       <h2 class="st-title">${S.isLast ? '🏁 Final standings' : '📊 Standings'}</h2>
       <div class="board" style="height:${rows.length * ROW}px">${rows.map((r) => `
@@ -88,7 +90,7 @@
       standKey = key; stopAnim(); return renderStandings();
     }
     standKey = null; stopAnim();
-    let h = '<h1>⚡ Tap Genius</h1>';
+    let h = S ? brand : hero;
     if (!S) {
       h += `<div class="card">
         <input id="name" placeholder="Your name" maxlength="20">
