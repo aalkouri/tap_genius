@@ -67,7 +67,7 @@ function closeRoom(room) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
-  bb:    { id: 'bb', name: 'Brain Bash', icon: '🧠', how: 'Tap the object that is the RIGHT color. Ignore the words under them! Faster picks score more.', ms: 95000, min: 1 },
+  bb:    { id: 'bb', name: 'Brain Bash', icon: '🧠', how: 'Tap the object the announcer asks for, like the purple pumpkin. Ignore the words under them! Faster picks score more.', ms: 95000, min: 1 },
   ns:    { id: 'ns', name: 'Number Sniper', icon: '🎯', how: 'Read the number over a player when they stop moving, then type it to eliminate them. Never type your own!', ms: 75000, min: 2 },
   pf:    { id: 'pf', name: 'Pie Fight', icon: '🥧', how: 'Run around the edge, then throw pies at faces across the arena. Hit = +1, get hit = -1!', ms: 50000, min: 2 },
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
@@ -283,8 +283,8 @@ function miniCleanup(room) {          // stop any timers a mini game left runnin
 }
 
 // ---------- Brain Bash ----------
-// Each round shows ONE simple object five times, each in a different single colour with a differently coloured outline. Exactly one
-// is the object's natural colour (a yellow banana, a red cherry...). Under every copy is a random colour WORD in a random colour: pure
+// Each round the announcer names an object AND a colour ("the purple pumpkin"). Four copies of the object are shown, each a different single
+// colour with a differently coloured outline, so exactly one matches. Under every copy is a random colour WORD in a random colour: pure
 // distraction. Tap the right-coloured one; the faster you are, the more points. A wrong tap = X + buzzer and you are out of that round.
 const BB = { ROUNDS: 10, ROUND_MS: 6500, REVEAL_MS: 1800, COLORS: ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'brown'] };
 BB.OUTLINES = [...BB.COLORS, 'black', 'white']; BB.TEXTS = [...BB.COLORS, 'black'];
@@ -309,12 +309,12 @@ function bbRound(room) {
   b.round++; b.phase = 'play'; b.startAt = Date.now(); b.answered = 0;
   let pool = BB.OBJECTS.filter((o) => !b.used.includes(o.id)); if (!pool.length) { b.used = []; pool = BB.OBJECTS; }
   const o = bbPick(pool); b.used.push(o.id); b.obj = o;
-  const wrong = shuffle(BB.COLORS.filter((c) => c !== o.nat && !o.avoid.includes(c))).slice(0, 4);           // four distinct wrong colours
-  const fills = shuffle([o.nat, ...wrong]);
-  b.correct = fills.indexOf(o.nat);
-  b.tiles = fills.map((f) => ({ f, o: bbPick(BB.OUTLINES.filter((c) => c !== f)), w: bbPick(BB.COLORS), wc: bbPick(BB.TEXTS) }));   // outline, colour WORD and its colour: all random
+  const want = bbPick(BB.COLORS); b.want = want;                                                                // the announced colour: "the purple pumpkin" (any colour, not the natural one)
+  const fills = shuffle([want, ...shuffle(BB.COLORS.filter((c) => c !== want)).slice(0, 3)]);                    // four tiles, four DIFFERENT colours: exactly one is the target
+  b.correct = fills.indexOf(want);
+  b.tiles = fills.map((f) => ({ f, o: bbPick(BB.OUTLINES.filter((c) => c !== f && c !== want)), w: bbPick(BB.COLORS), wc: bbPick(BB.TEXTS) }));   // outline (never the target colour), colour WORD and its colour: all random decoys
   room.players.forEach((p) => { p.bb = { ans: -1, pts: 0 }; });
-  emit(room, { ev: 'bbround', r: b.round, n: BB.ROUNDS, obj: o.id, name: o.name, tiles: b.tiles, ms: BB.ROUND_MS, scores: bbScores(room) });
+  emit(room, { ev: 'bbround', r: b.round, n: BB.ROUNDS, obj: o.id, name: o.name, color: want, tiles: b.tiles, ms: BB.ROUND_MS, scores: bbScores(room) });
   clearTimeout(b.timer); b.timer = setTimeout(() => bbReveal(room), BB.ROUND_MS);
 }
 const bbScores = (room) => Object.fromEntries(room.players.map((p) => [p.idx, p.bbTotal || 0]));
@@ -750,7 +750,7 @@ function goAway(ws) {
 }
 // Bring a returning player up to date with things that are not part of the normal state message.
 function resync(room, p) {
-  if (room.state === 'play' && room.bb && room.bb.live && room.bb.phase !== 'idle') { const b = room.bb; send(p.ws, { type: 'ev', ev: 'bbsync', r: b.round, n: BB.ROUNDS, obj: b.obj.id, name: b.obj.name, tiles: b.tiles, ms: Math.max(0, BB.ROUND_MS - (Date.now() - b.startAt)), phase: b.phase, correct: b.phase === 'reveal' ? b.correct : -1, mine: p.bb ? p.bb.ans : -1, scores: bbScores(room) }); }
+  if (room.state === 'play' && room.bb && room.bb.live && room.bb.phase !== 'idle') { const b = room.bb; send(p.ws, { type: 'ev', ev: 'bbsync', r: b.round, n: BB.ROUNDS, obj: b.obj.id, name: b.obj.name, color: b.want, tiles: b.tiles, ms: Math.max(0, BB.ROUND_MS - (Date.now() - b.startAt)), phase: b.phase, correct: b.phase === 'reveal' ? b.correct : -1, mine: p.bb ? p.bb.ans : -1, scores: bbScores(room) }); }
   if (room.state === 'play' && room.pf && room.pf.live) send(p.ws, { type: 'ev', ev: 'pfsync', sc: pfScores(room), pies: room.pf.pies.map((x) => ({ id: x.id, x: Math.round(x.x), y: Math.round(x.y), dx: x.dx, dy: x.dy, sp: PF.PIE_SPEED })) });
   if (room.state === 'play' && room.bomb) send(p.ws, { type: 'ev', ev: 'bstate', holder: room.bomb.holder ? room.bomb.holder.idx : -1, alive: bombIdx(room), n: room.bomb.out.length });
   if (room.state === 'play' && room.copy && room.copy.phase !== 'idle') { const c = room.copy; send(p.ws, { type: 'ev', ev: 'ccsync', r: c.round, phase: c.phase, seq: c.seq.slice(0, c.len), i: p.cc ? p.cc.i : 0, done: !!(p.cc && p.cc.done), alive: copyAliveIdx(room), scores: copyScores(room), finished: room.players.filter((q) => q.cc && q.cc.done).map((q) => ({ i: q.idx, rank: q.cc.rank, pts: q.cc.pts })) }); }

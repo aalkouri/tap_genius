@@ -342,7 +342,8 @@
     };
     const setRound = (ev, remaining, state) => {
       phase = state || 'play'; ms = ev.ms; startAt = performance.now() - (ev.full === false ? 0 : 0) - (ms - remaining); answered = false; ans = {}; scores = ev.scores || scores;
-      ask.innerHTML = `Round ${ev.r}/${ev.n} — tap the <b>${esc(ev.name)}</b> that is the <b>RIGHT color</b>!`;
+      ask.innerHTML = `Round ${ev.r}/${ev.n} — tap the<br><b class="bbtarget" style="color:${BBHEX[ev.color]}">${esc(ev.color)} ${esc(ev.name)}</b>`;
+      if (!state) Sfx.say(`Tap the ${ev.color} ${ev.name}`);
       grid.innerHTML = ev.tiles.map((t, i) => `<button class="bbtile" data-i="${i}" ${phase === 'play' ? '' : 'disabled'}>${bbSvg(ev.obj, t.f, t.o)}<span class="bbw" style="color:${BBHEX[t.wc]};--sh:${t.wc === 'black' ? '#fff' : '#111'}">${esc(t.w.toUpperCase())}</span></button>`).join('');
       stat('Go!'); board();
     };
