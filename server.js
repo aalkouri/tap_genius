@@ -800,7 +800,7 @@ const ACTIONS = {
   ping(ws) { send(ws, { type: 'pong' }); },     // lets a phone that just woke up check that its connection is really alive
   leave(ws) {    // the player chose to leave: free their seat straight away
     const room = ws.room, p = ws.player; if (!room || !p) return;
-    if (room.host === p) return hostGone(room, 'The host left, so the game ended.');
+    if (room.host === p) return hostGone(room, 'The host ended the game.');
     dropPlayer(room, p); send(ws, { type: 'left' });
   },
   list(ws) {     // start watching the list of open games

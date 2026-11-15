@@ -1140,7 +1140,19 @@
     if (b) { b.disabled = me || !standingsGate(); b.textContent = me ? '✓ Ready — waiting for others…' : 'Ready'; b.classList.toggle('waiting', me); }
   }
 
+  // Host-only "Exit game": hold for 5 seconds to end the game for everyone (lives outside #app so it survives every screen and live game)
+  const exitBtn = document.createElement('button'); exitBtn.id = 'hostexit'; exitBtn.hidden = true;
+  exitBtn.innerHTML = '<i></i><span>Hold 5s to exit game</span>'; document.body.appendChild(exitBtn);
+  (function () {
+    let t0 = 0, raf = 0; const bar = exitBtn.firstChild;
+    const stop = () => { t0 = 0; cancelAnimationFrame(raf); bar.style.width = '0'; exitBtn.classList.remove('hold'); };
+    const tick = () => { if (!t0) return; const f = Math.min(1, (Date.now() - t0) / 5000); bar.style.width = f * 100 + '%'; if (f >= 1) { stop(); send({ action: 'leave' }); } else raf = requestAnimationFrame(tick); };
+    exitBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); if (t0) return; t0 = Date.now(); exitBtn.classList.add('hold'); raf = requestAnimationFrame(tick); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((n) => exitBtn.addEventListener(n, stop));
+    exitBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+  })();
   function render() {
+    exitBtn.hidden = !(S && S.isHost);
     clearInterval(timerId);
     if (S && (S.state === 'countdown' || S.state === 'play')) {     // set up once; ignore re-broadcasts while it runs
       const key = S.state + ':' + S.code + ':' + S.mini.index;
