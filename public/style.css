@@ -69,3 +69,10 @@ ol { padding-left:24px; } li { padding:4px 0; } li span { float:right; font-weig
 .brand span { font-family:'Arial Rounded MT Bold','Baloo 2','Nunito',system-ui,sans-serif; font-weight:900; font-size:1.9rem; letter-spacing:.02em; text-transform:uppercase;
   background:linear-gradient(180deg,var(--yellow) 25%,var(--orange) 85%); -webkit-background-clip:text; background-clip:text; color:transparent;
   filter:drop-shadow(2px 0 0 var(--navy)) drop-shadow(-2px 0 0 var(--navy)) drop-shadow(0 2px 0 var(--navy)) drop-shadow(0 -2px 0 var(--navy)) drop-shadow(0 4px 0 #021a45); }
+
+.rdy { opacity:0; transform:scale(.4); transition:opacity .25s, transform .25s; width:24px; height:24px; border-radius:50%; background:#2ecc71; color:#06331a; font-weight:900; font-size:.85rem; display:flex; align-items:center; justify-content:center; }
+.srow.isready .rdy { opacity:1; transform:scale(1); }
+#ready.waiting { background:linear-gradient(180deg,#2fd27b,#1a9e56); color:#fff; box-shadow:0 5px 0 #0e6b38; opacity:1; }
+#ready:disabled:not(.waiting) { opacity:.45; }
+button.small { padding:9px; font-size:.85rem; }
+#rdycount { margin:10px 0 4px; font-weight:700; }

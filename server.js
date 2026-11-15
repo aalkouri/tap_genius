@@ -9,7 +9,6 @@ const BANDS = ['2-5', '6-10', '11+'];
 const BAND_LABEL = { '2-5': 'Ages 2–5', '6-10': 'Ages 6–10', '11+': 'Ages 11+' };
 const QUESTION_MS = { '2-5': 30000, '6-10': 20000, '11+': 20000 }; // little ones get more time
 const ROUNDS = 10, MAX_PLAYERS = 50, ROOM_IDLE_MS = 2 * 3600e3;
-const STANDINGS_MS = 9000;   // standings screen between rounds (host can skip)
 
 // ---------- question bank: questions/<category>.json (built by tools/build_questions.py) ----------
 // Questions whose picture is a file under public/img/ are skipped when that file is missing (e.g. Disney art not added yet).
@@ -90,6 +89,7 @@ function view(room, p) {
     v.standings = room.snap.map((r) => ({ ...r, you: r.name === p.name }));
     v.round = { index: room.qIndex, total: room.order.length };
     v.isLast = room.isLast;
+    v.ready = room.players.filter((x) => x.ready).map((x) => x.name);
   }
   if (room.state === 'question' || room.state === 'reveal') {
     const q = BYID.get(room.order[room.qIndex]);
@@ -121,7 +121,8 @@ function reveal(room) {
   });
   broadcast(room);
 }
-// Between rounds: everyone sees who is winning. Ranks before/after let clients animate the movement.
+// Between rounds: everyone sees who is winning (ranks before/after let clients animate the movement), then waits for
+// every player to tap Ready. The host can override so one idle player can't hold the game up.
 function enterStandings(room) {
   clearTimeout(room.timer);
   const rank = (key) => new Map([...room.players].sort((a, b) => b[key] - a[key]).map((p, i) => [p, i]));  // stable: ties keep join order
@@ -130,8 +131,12 @@ function enterStandings(room) {
     .sort((a, b) => a.from - b.from);
   room.isLast = room.qIndex + 1 >= room.order.length;
   room.state = 'standings';
-  room.timer = setTimeout(() => advance(room), STANDINGS_MS);
+  room.players.forEach((p) => { p.ready = false; });   // everyone taps Ready before the next question
   broadcast(room);
+}
+function checkAllReady(room) {
+  if (room.state === 'standings' && room.players.length && room.players.every((p) => p.ready)) { advance(room); return true; }
+  return false;
 }
 function advance(room) {
   if (room.state !== 'standings') return;
@@ -145,6 +150,7 @@ function removePlayer(ws) {
   if (!room.players.length) { clearTimeout(room.timer); rooms.delete(room.code); return; }
   if (room.host.ws === ws) room.host = room.players[0];
   if (room.state === 'question' && room.players.every((p) => p.choice !== null)) return reveal(room);
+  if (checkAllReady(room)) return;       // the player we were waiting on left
   broadcast(room);
 }
 
@@ -189,7 +195,12 @@ const ACTIONS = {
     p.choice = m.choice; p.answeredAt = Date.now();
     if (room.players.every((x) => x.choice !== null)) reveal(room); else broadcast(room);
   },
-  next(ws) {   // reveal -> standings -> (auto after STANDINGS_MS, or host skips) -> next question / final scores
+  ready(ws) {  // standings: this player is ready; the last one to tap starts the next question
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'standings' || p.ready) return;
+    p.ready = true;
+    if (!checkAllReady(room)) broadcast(room);
+  },
+  next(ws) {   // reveal -> standings; on the standings screen the host can skip waiting
     const room = hostRoom(ws); if (!room) return;
     if (room.state === 'reveal') return enterStandings(room);
     if (room.state === 'standings') return advance(room);

@@ -41,14 +41,20 @@
         <div class="srow ${r.you ? 'me' : ''}" data-name="${esc(r.name)}" style="transform:translateY(${r.from * ROW}px)">
           <div class="rk"><span class="rkn">${r.from + 1}</span></div>
           <div class="nm">${esc(r.name)}${r.you ? ' <small>(you)</small>' : ''}</div>
+          <span class="rdy" title="Ready">✓</span>
           <div class="pts"><span class="sc">${r.prev}</span>${r.gained > 0 ? `<span class="gain">+${r.gained}</span>` : ''}</div>
         </div>`).join('')}</div>
-      ${S.isHost ? `<button id="next">${S.isLast ? 'Final results' : 'Continue'}</button>` : '<p class="muted">Next round starting soon…</p>'}`;
+      <p class="muted" id="rdycount"></p>
+      <button id="ready" disabled>Ready</button>
+      ${S.isHost ? '<button id="next" class="secondary small">Continue without waiting</button>' : ''}`;
+    const rb = document.getElementById('ready'); rb.onclick = () => { rb.disabled = true; send({ action: 'ready' }); };
     const next = document.getElementById('next'); if (next) next.onclick = () => send({ action: 'next' });
 
     const els = [...app.querySelectorAll('.srow')], timers = []; let raf = 0, stopped = false;
     const at = (ms, fn) => timers.push(setTimeout(() => { if (!stopped) fn(); }, ms));
-    const COUNT_AT = 800, COUNT_MS = 2200;
+    const COUNT_AT = 800, COUNT_MS = 2200, READY_AT = COUNT_AT + COUNT_MS + 500 + 900;   // Ready unlocks once the rows have settled
+    let canReady = false; at(READY_AT, () => { canReady = true; updateReady(); });
+    standingsGate = () => canReady;
     // 1) count every score up from its previous value
     at(COUNT_AT, () => {
       els.forEach((el) => { const g = el.querySelector('.gain'); if (g) g.classList.add('go'); });
@@ -79,14 +85,26 @@
       if (!up && !down) Sfx.play('whoosh');
       els.forEach((el, i) => { if (rows[i].to === 0) el.classList.add('leader'); });
     });
-    anim = { stop() { stopped = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout); } };
+    updateReady();
+    anim = { stop() { stopped = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout); standingsGate = () => false; } };
+  }
+
+  // live ready state (also called when the server re-broadcasts, which never re-renders the animation)
+  let standingsGate = () => false;
+  function updateReady() {
+    if (!S || S.state !== 'standings') return;
+    const ready = new Set(S.ready), total = S.standings.length, me = ready.has(S.you.name);
+    app.querySelectorAll('.srow').forEach((el) => el.classList.toggle('isready', ready.has(el.dataset.name)));
+    const c = document.getElementById('rdycount'); if (c) c.textContent = `${S.ready.length} of ${S.standings.length} ready`;
+    const b = document.getElementById('ready');
+    if (b) { b.disabled = me || !standingsGate(); b.textContent = me ? '✓ Ready — waiting for others…' : 'Ready'; b.classList.toggle('waiting', me); }
   }
 
   function render() {
     clearInterval(timerId);
     if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)
       const key = S.code + ':' + S.round.index;
-      if (key === standKey) return;
+      if (key === standKey) { updateReady(); return; }
       standKey = key; stopAnim(); return renderStandings();
     }
     standKey = null; stopAnim();
