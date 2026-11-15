@@ -59,7 +59,7 @@ function saveAvatar(dataUrl) {
   return id;
 }
 function closeRoom(room) {
-  clearTimeout(room.timer); clearTimeout(room.spawnTimer);
+  clearTimeout(room.timer); clearTimeout(room.spawnTimer); clearInterval(room.tick);
   room.avIds.forEach((id) => AVATARS.delete(id));
   rooms.delete(room.code);
 }
@@ -67,6 +67,7 @@ function closeRoom(room) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
+  rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs. Wait for the bridges!', ms: 70000 },
 };
 const MINI_ROUNDS = 3, COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
 const MISS_LOCK_MS = 1000, MISS_GRACE_MS = 500;   // empty-square penalty: 1s lockout; only squares with no mole for 0.5s count as empty
@@ -126,6 +127,7 @@ function view(room, p) {
   if (room.state === 'countdown' || room.state === 'play') {
     const g = MINI[room.order[room.qIndex]];
     v.mini = { game: g.id, name: g.name, icon: g.icon, how: g.how, index: room.qIndex, total: room.order.length, ms: room.state === 'countdown' ? COUNTDOWN_MS : g.ms, cells: CELLS };
+    if (g.id === 'rc' && room.rc) v.mini.rc = { len: RC.LEN, track: room.rc.track, cars: room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av })) };
   }
   if (room.state === 'standings') {
     v.standings = room.snap.map((r) => ({ ...r, you: r.name === p.name }));
@@ -191,21 +193,100 @@ const emit = (room, o) => room.players.forEach((p) => send(p.ws, { type: 'ev', .
 function startMini(room) {             // every mini game opens with the same 3-2-1-GO countdown
   clearTimeout(room.timer); clearTimeout(room.spawnTimer);
   room.state = 'countdown';
-  room.players.forEach((p) => { p.prev = p.score; p.gained = 0; });
+  room.players.forEach((p, i) => { p.prev = p.score; p.gained = 0; p.idx = i; });
+  room.rc = MINI[room.order[room.qIndex]].id === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
   broadcast(room);
   room.timer = setTimeout(() => playMini(room), COUNTDOWN_MS);
 }
 function playMini(room) {
   if (room.state !== 'countdown') return;
   const g = MINI[room.order[room.qIndex]];
-  room.state = 'play'; room.playStart = Date.now(); room.moles = new Map(); room.moleSeq = 0;
-  room.holeFree = Array(CELLS).fill(0);   // per hole: time from which a new mole may use it
-  room.holeEnd = Array(CELLS).fill(0);    // per hole: when its last mole left (whacked or timed out)
-  room.players.forEach((p) => { p.missUntil = 0; });
+  room.state = 'play'; room.playStart = Date.now(); room.moles = null;
   broadcast(room);
-  room.spawnTimer = setTimeout(() => spawnMoles(room), 500);
+  if (g.id === 'whack') {
+    room.moles = new Map(); room.moleSeq = 0;
+    room.holeFree = Array(CELLS).fill(0);   // per hole: time from which a new mole may use it
+    room.holeEnd = Array(CELLS).fill(0);    // per hole: when its last mole left (whacked or timed out)
+    room.players.forEach((p) => { p.missUntil = 0; });
+    room.spawnTimer = setTimeout(() => spawnMoles(room), 500);
+  } else if (g.id === 'rc') rcInit(room);
   room.timer = setTimeout(() => endMini(room), g.ms);
 }
+// ---------- RC Mayhem ----------
+// Every player drives an identical lane. The server runs all the physics (30 Hz) so the race is fair:
+//  - log (small): jump it, or it slows you      - rock (big): engine cuts out for a couple of seconds
+//  - bridge / lift: rises and falls on a timer; driving into it while it is up cuts the engine and bumps you back
+const RC = { LEN: 3600, MAXV: 360, ACC: 520, DECEL: 240, BRAKE: 700, G: 1500, JV: 470, CAR: 20, TICK: 33,
+  STALL_MS: 2600, BRIDGE_STALL_MS: 2200, SLOW_MS: 900, AFTER_FIRST_MS: 15000, POINTS: [10, 7, 5, 4, 3, 2] };
+function mulberry(seed) { return () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function makeTrack() {
+  const r = mulberry(Math.floor(Math.random() * 1e9)), track = [];
+  let x = 520;
+  while (x < RC.LEN - 450) {
+    const roll = r(); let o;
+    if (roll < 0.36) o = { k: 'log', x, w: 26 + Math.floor(r() * 14), h: 24 };
+    else if (roll < 0.52) o = { k: 'rock', x, w: 50 + Math.floor(r() * 30), h: 56 };
+    else { o = { k: roll < 0.77 ? 'bridge' : 'lift', x, w: 120, per: 4200 + Math.floor(r() * 1800), ph: Math.floor(r() * 6000) }; o.up = Math.round(o.per * (0.42 + r() * 0.12)); }
+    track.push(o); x += o.w + 110 + Math.floor(r() * 170);
+  }
+  track.forEach((o, i) => { o.i = i; });
+  return track;
+}
+const rcUp = (o, t) => (((t + o.ph) % o.per) + o.per) % o.per < o.up;      // bridge / lift is raised (blocking)
+function rcInit(room) {
+  room.rc.live = true; room.rc.finished = 0; room.rcLast = Date.now(); room.rcAllDone = false;
+  room.players.forEach((p) => { p.rc = { x: 0, y: 0, vy: 0, v: 0, go: false, jumpAt: -1e9, stallUntil: 0, slowUntil: 0, hit: new Set(), done: false, finT: 0, rank: 0 }; });
+  room.tick = setInterval(() => rcTick(room), RC.TICK);
+}
+function rcTick(room) {
+  if (room.state !== 'play' || !room.rc) return;
+  const now = Date.now(), dt = Math.min(0.1, (now - room.rcLast) / 1000), t = now - room.playStart, g = MINI.rc; room.rcLast = now;
+  const cars = [];
+  for (const p of room.players) {
+    const c = p.rc; if (!c) continue;
+    const prevFront = c.x + RC.CAR, engine = now >= c.stallUntil;
+    if (c.done) c.v = Math.max(0, c.v - 400 * dt);
+    else if (!engine) c.v = Math.max(0, c.v - RC.BRAKE * dt);
+    else {
+      const maxv = now < c.slowUntil ? RC.MAXV * 0.55 : RC.MAXV;
+      if (c.go) c.v = c.v > maxv ? Math.max(maxv, c.v - 900 * dt) : Math.min(maxv, c.v + RC.ACC * dt);
+      else c.v = Math.max(0, c.v - RC.DECEL * dt);
+    }
+    c.x += c.v * dt;
+    if (c.y > 0 || c.vy > 0) { c.vy -= RC.G * dt; c.y += c.vy * dt; if (c.y <= 0) { c.y = 0; c.vy = 0; } }
+    if (c.y === 0 && engine && !c.done && now - c.jumpAt < 130) { c.vy = RC.JV; c.y = 0.01; c.jumpAt = -1e9; }   // jump (a press just before landing still counts)
+    if (!c.done) {
+      const front = c.x + RC.CAR, back = c.x - RC.CAR;
+      for (const o of room.rc.track) {
+        if (o.x > front + 40) break;
+        if (o.x + o.w < back) continue;
+        if (o.k === 'log' || o.k === 'rock') {
+          if (front > o.x && back < o.x + o.w && c.y < o.h && !c.hit.has(o.i)) {
+            c.hit.add(o.i);
+            if (o.k === 'log') { c.v *= 0.35; c.slowUntil = now + RC.SLOW_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'small' }); }
+            else { c.v = 0; c.stallUntil = now + RC.STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' }); }
+          }
+        } else if (prevFront <= o.x && front > o.x && rcUp(o, t)) {         // drove into a raised bridge / lift
+          c.x = o.x - RC.CAR - 4; c.v = 0; c.stallUntil = now + RC.BRIDGE_STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' });
+        }
+      }
+      if (c.x >= RC.LEN) {
+        c.done = true; c.finT = t; c.rank = ++room.rc.finished;
+        emit(room, { ev: 'rcfinish', i: p.idx, rank: c.rank, t });
+        if (c.rank === 1) { clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), Math.min(Math.max(1000, g.ms - t), RC.AFTER_FIRST_MS)); }
+      }
+    }
+    cars.push([p.idx, Math.round(c.x), Math.round(c.y), Math.round(c.v), (c.y > 0 ? 1 : 0) | (now < c.stallUntil ? 2 : 0) | (now < c.slowUntil ? 4 : 0) | (c.done ? 8 : 0), Math.max(0, Math.round((c.stallUntil - now) / 100))]);
+  }
+  emit(room, { ev: 'rc', t, c: cars });
+  if (!room.rcAllDone && room.players.length && room.players.every((p) => p.rc && p.rc.done)) { room.rcAllDone = true; clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }
+}
+function rcAward(room) {            // points by finishing place; anyone who did not finish is ranked by distance
+  const order = room.players.filter((p) => p.rc).sort((a, b) => (b.rc.done - a.rc.done) || (a.rc.done ? a.rc.finT - b.rc.finT : b.rc.x - a.rc.x));
+  order.forEach((p, i) => { p.score += RC.POINTS[i] !== undefined ? RC.POINTS[i] : 1; });
+  room.rc.live = false;
+}
+
 // Whack-a-mole: heads pop faster and stay up for less time as the game goes on; near the end several pop at once.
 function spawnMoles(room) {
   if (room.state !== 'play') return;
@@ -233,7 +314,8 @@ function spawnMoles(room) {
 }
 function endMini(room) {
   if (room.state !== 'play') return;
-  clearTimeout(room.spawnTimer);
+  clearTimeout(room.spawnTimer); clearInterval(room.tick); room.tick = null;
+  if (room.rc && room.rc.live) rcAward(room);
   room.players.forEach((p) => { p.gained = p.score - p.prev; });
   enterStandings(room);
 }
@@ -301,8 +383,8 @@ const ACTIONS = {
   start(ws) {
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
     if (room.mode === 'mini') {
-      const ids = Object.keys(MINI);
-      room.order = Array.from({ length: MINI_ROUNDS }, () => ids[Math.floor(Math.random() * ids.length)]);
+      const ids = shuffle(Object.keys(MINI));
+      room.order = Array.from({ length: MINI_ROUNDS }, (_, i) => ids[i % ids.length]);
       room.qIndex = 0; return startMini(room);
     }
     room.ms = QUESTION_MS[room.band];
@@ -318,7 +400,7 @@ const ACTIONS = {
     if (room.players.every((x) => x.choice !== null)) reveal(room); else broadcast(room);
   },
   whack(ws, m) {   // whack-a-mole: the first tap on a head scores; later taps on the same head do nothing
-    const room = ws.room, p = ws.player; if (!room || room.state !== 'play') return;
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.moles) return;
     const mole = room.moles.get(m.id);
     if (!mole || mole.hit || Date.now() > mole.exp + 150) return;
     mole.hit = true; p.score += 1;                      // exactly one point per mole: `hit` can only be set once
@@ -327,13 +409,19 @@ const ACTIONS = {
     emit(room, { ev: 'hit', id: m.id, by: p.name, n: p.score - p.prev });   // n = that player's points this round (authoritative)
   },
   miss(ws, m) {    // whack-a-mole: tapping an empty square costs a point and locks out more empty taps for a second
-    const room = ws.room, p = ws.player; if (!room || room.state !== 'play') return;
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.moles) return;
     const cell = m.cell, now = Date.now();
     if (!Number.isInteger(cell) || cell < 0 || cell >= CELLS || now < (p.missUntil || 0)) return;
     for (const mo of room.moles.values()) if (mo.cell === cell && !mo.hit && now <= mo.exp) return;   // a mole is up there: not empty
     if (now < room.holeEnd[cell] + MISS_GRACE_MS) return;                                              // a mole only just left: near miss, no penalty
     p.missUntil = now + MISS_LOCK_MS; p.score -= 1;
     emit(room, { ev: 'miss', by: p.name, cell, n: p.score - p.prev });
+  },
+  rcgo(ws, m) {    // RC Mayhem: GO button held / released
+    const p = ws.player; if (!ws.room || ws.room.state !== 'play' || !p.rc) return; p.rc.go = !!m.on;
+  },
+  rcjump(ws) {     // RC Mayhem: JUMP tapped
+    const p = ws.player; if (!ws.room || ws.room.state !== 'play' || !p.rc) return; p.rc.jumpAt = Date.now();
   },
   ready(ws) {  // standings: this player is ready; the last one to tap starts the next question
     const room = ws.room, p = ws.player; if (!room || room.state !== 'standings' || p.ready) return;
@@ -359,7 +447,7 @@ wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     const fn = Object.hasOwn(ACTIONS, m.action) && ACTIONS[m.action];
-    if (fn) { if (ws.room) ws.room.last = Date.now(); fn(ws, m); }
+    if (fn) { if (ws.room) ws.room.last = Date.now(); try { fn(ws, m); } catch (e) { console.error('action failed:', m.action, e.message); } }
   });
   ws.on('close', () => { browsers.delete(ws); removePlayer(ws); });
 });

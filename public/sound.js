@@ -2,7 +2,7 @@
 // Browsers only allow audio after a tap, so the context is unlocked on the first pointer event.
 window.Sfx = (() => {
   const AC = window.AudioContext || window.webkitAudioContext;
-  let ctx = null, master = null, muted = false, primed = false;
+  let ctx = null, master = null, muted = false, primed = false, eng = null;
   try { muted = localStorage.getItem('tg_mute') === '1'; } catch (e) { }
   window.__sfxLog = [];                                   // handy for tests/debugging
 
@@ -66,6 +66,10 @@ window.Sfx = (() => {
     pop:      () => tone(320, 0, 0.09, 'sine', 0.12, 640),                                // a head pops up
     mine:     () => { tone(N.E5, 0, 0.08, 'triangle', 0.22); tone(N.C6, 0.07, 0.14, 'triangle', 0.22); },  // I got it
     bonk:     () => tone(210, 0, 0.12, 'square', 0.1, 95),                                // someone else got it
+    jump:     () => tone(220, 0, 0.22, 'sine', 0.2, 760),                                  // RC: boing
+    thunk:    () => { tone(120, 0, 0.12, 'square', 0.16, 60); noise(0, 0.08, 0.12, 500); },  // RC: clipped a log
+    crash:    () => { noise(0, 0.5, 0.3, 700); tone(190, 0, 0.55, 'sawtooth', 0.2, 45); tone(95, 0.05, 0.5, 'square', 0.14, 40); },   // RC: engine cut out
+    restart:  () => { [0, 0.16, 0.3].forEach((t, i) => tone(70 + i * 25, t, 0.12, 'sawtooth', 0.14, 120 + i * 40)); tone(90, 0.46, 0.35, 'sawtooth', 0.14, 260); },   // RC: engine coughs back to life
     step:     () => tone(150, 0, 0.05, 'triangle', 0.09, 90),                             // footsteps in the podium cutscene
     land:     () => tone(260, 0, 0.1, 'sine', 0.16, 120),
     shutter:  () => { noise(0, 0.07, 0.2, 3000); noise(0.09, 0.05, 0.14, 2200); },         // camera click
@@ -79,6 +83,20 @@ window.Sfx = (() => {
       if (muted || !SOUNDS[name] || !ensure()) return;
       try { SOUNDS[name](arg); } catch (e) { }
     },
+    // RC engine: one held note whose pitch follows the car's speed (0..1); call engineStop() when the race ends
+    engine(speed, on) {
+      if (muted || !ensure()) return this.engineStop();
+      if (!eng) {
+        const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+        o.type = 'sawtooth'; f.type = 'lowpass'; f.frequency.value = 700; g.gain.value = 0;
+        o.connect(f); f.connect(g); g.connect(master); o.start(); eng = { o, g, f };
+      }
+      const t = ctx.currentTime;
+      eng.o.frequency.setTargetAtTime(52 + speed * 120, t, 0.06);
+      eng.f.frequency.setTargetAtTime(500 + speed * 900, t, 0.08);
+      eng.g.gain.setTargetAtTime(on ? 0.05 + 0.06 * speed : 0, t, 0.08);
+    },
+    engineStop() { if (!eng) return; const e = eng; eng = null; try { e.g.gain.setTargetAtTime(0, ctx.currentTime, 0.05); e.o.stop(ctx.currentTime + 0.3); } catch (x) { } },
     unlock() {
       ensure(); music.start();
       if (!primed && window.speechSynthesis) {            // iOS only lets speech start from a tap: prime it silently once
@@ -95,7 +113,7 @@ window.Sfx = (() => {
     toggle() {
       muted = !muted;
       try { localStorage.setItem('tg_mute', muted ? '1' : '0'); } catch (e) { }
-      if (muted) music.pause(); else { ensure(); music.start(); SOUNDS.tap(); }
+      if (muted) { music.pause(); this.engineStop(); } else { ensure(); music.start(); SOUNDS.tap(); }
       return muted;
     },
   };
