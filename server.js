@@ -67,6 +67,7 @@ function closeRoom(room) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
+  bb:    { id: 'bb', name: 'Brain Bash', icon: '🧠', how: 'Tap the object that is the RIGHT color. Ignore the words under them! Faster picks score more.', ms: 95000, min: 1 },
   ns:    { id: 'ns', name: 'Number Sniper', icon: '🎯', how: 'Read the number over a player when they stop moving, then type it to eliminate them. Never type your own!', ms: 75000, min: 2 },
   pf:    { id: 'pf', name: 'Pie Fight', icon: '🥧', how: 'Run around the edge, then throw pies at faces across the arena. Hit = +1, get hit = -1!', ms: 50000, min: 2 },
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
@@ -141,6 +142,7 @@ function view(room, p) {
       v.mini.pic = { drawer: room.pic.drawer.name, you: me, hint: picPattern(room.pic), len: room.pic.word.length };
       if (me) v.mini.pic.word = room.pic.word;
     }
+    if (g.id === 'bb') v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av }));
     if (g.id === 'ns') {
       v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av }));
       if (room.ns) { v.mini.dead = room.players.filter((x) => x.ns && !x.ns.alive).map((x) => x.idx); v.mini.log = room.ns.log; }     // so a returning player sees who is already out
@@ -228,11 +230,12 @@ function startMini(room) {             // every mini game opens with the same 3-
     room.order[room.qIndex] = alt.length ? alt[Math.floor(Math.random() * alt.length)] : 'whack';
   }
   const gid = room.order[room.qIndex];
-  miniCleanup(room); room.bomb = null; room.copy = null; room.pf = null; room.ns = null;
+  miniCleanup(room); room.bomb = null; room.copy = null; room.pf = null; room.ns = null; room.bb = null;
   room.rc = gid === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
   room.pic = gid === 'pic' ? picStart(room) : null;            // Picture This: choose the drawer and the word
   if (gid === 'pf') pfPlace(room);                              // Pie Fight: spread everyone around the edge
   if (gid === 'ns') nsPlace(room);                              // Number Sniper: scatter everyone and give them numbers
+  if (gid === 'bb') room.players.forEach((p) => { p.bbTotal = 0; });
   broadcast(room);
   room.timer = setTimeout(() => playMini(room), COUNTDOWN_MS);
 }
@@ -254,6 +257,7 @@ function playMini(room) {
   else if (g.id === 'copy') copyInit(room);
   else if (g.id === 'pf') pfInit(room);
   else if (g.id === 'ns') nsInit(room);
+  else if (g.id === 'bb') bbInit(room);
   room.timer = setTimeout(() => endMini(room), g.ms);
 }
 // The order of mini games for a series: `n` rounds drawn from `ids`, every game once per lap (shuffled), never the same game twice in a row.
@@ -274,7 +278,56 @@ function awardPlaces(groups) {
 function miniCleanup(room) {          // stop any timers a mini game left running
   const b = room.bomb; if (b) { clearTimeout(b.fuseTimer); clearTimeout(b.warnTimer); clearTimeout(b.rebomb); }
   const c = room.copy; if (c) clearTimeout(c.timer);
+  if (room.bb) { clearTimeout(room.bb.timer); room.bb.live = false; }
 }
+
+// ---------- Brain Bash ----------
+// Each round shows ONE simple object five times, each in a different single colour with a differently coloured outline. Exactly one
+// is the object's natural colour (a yellow banana, a red cherry...). Under every copy is a random colour WORD in a random colour: pure
+// distraction. Tap the right-coloured one; the faster you are, the more points. A wrong tap = X + buzzer and you are out of that round.
+const BB = { ROUNDS: 10, ROUND_MS: 6500, REVEAL_MS: 1800, COLORS: ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'brown'] };
+BB.OUTLINES = [...BB.COLORS, 'black', 'white']; BB.TEXTS = [...BB.COLORS, 'black'];
+BB.OBJECTS = [   // nat = its natural colour; avoid = other colours that would also be plausible (never used as the wrong answers)
+  { id: 'banana', name: 'banana', nat: 'yellow', avoid: ['green', 'brown'] }, { id: 'carrot', name: 'carrot', nat: 'orange', avoid: ['purple'] },
+  { id: 'leaf', name: 'leaf', nat: 'green', avoid: ['yellow', 'orange', 'brown', 'red'] }, { id: 'sun', name: 'sun', nat: 'yellow', avoid: ['orange', 'red'] },
+  { id: 'drop', name: 'water drop', nat: 'blue', avoid: [] }, { id: 'grapes', name: 'bunch of grapes', nat: 'purple', avoid: ['green', 'red'] },
+  { id: 'tomato', name: 'tomato', nat: 'red', avoid: ['green', 'yellow', 'orange'] }, { id: 'pumpkin', name: 'pumpkin', nat: 'orange', avoid: ['green', 'yellow'] },
+  { id: 'lemon', name: 'lemon', nat: 'yellow', avoid: ['green'] }, { id: 'cherry', name: 'cherry', nat: 'red', avoid: ['purple'] },
+  { id: 'heart', name: 'heart', nat: 'red', avoid: ['pink', 'purple'] }, { id: 'fish', name: 'goldfish', nat: 'orange', avoid: ['yellow', 'red'] },
+  { id: 'bear', name: 'teddy bear', nat: 'brown', avoid: ['pink', 'yellow', 'orange'] }, { id: 'pig', name: 'pig', nat: 'pink', avoid: ['red', 'brown'] },
+  { id: 'acorn', name: 'acorn', nat: 'brown', avoid: ['green', 'orange'] }, { id: 'eggplant', name: 'eggplant', nat: 'purple', avoid: ['pink'] },
+];
+const bbPick = (a) => a[Math.floor(Math.random() * a.length)];
+function bbInit(room) {
+  room.bb = { round: 0, phase: 'idle', live: true, used: [], timer: null, tiles: [], correct: -1, startAt: 0, obj: null, answered: 0 };
+  room.players.forEach((p) => { p.bbTotal = 0; });
+  bbRound(room);
+}
+function bbRound(room) {
+  const b = room.bb; if (!b || room.state !== 'play') return;
+  b.round++; b.phase = 'play'; b.startAt = Date.now(); b.answered = 0;
+  let pool = BB.OBJECTS.filter((o) => !b.used.includes(o.id)); if (!pool.length) { b.used = []; pool = BB.OBJECTS; }
+  const o = bbPick(pool); b.used.push(o.id); b.obj = o;
+  const wrong = shuffle(BB.COLORS.filter((c) => c !== o.nat && !o.avoid.includes(c))).slice(0, 4);           // four distinct wrong colours
+  const fills = shuffle([o.nat, ...wrong]);
+  b.correct = fills.indexOf(o.nat);
+  b.tiles = fills.map((f) => ({ f, o: bbPick(BB.OUTLINES.filter((c) => c !== f)), w: bbPick(BB.COLORS), wc: bbPick(BB.TEXTS) }));   // outline, colour WORD and its colour: all random
+  room.players.forEach((p) => { p.bb = { ans: -1, pts: 0 }; });
+  emit(room, { ev: 'bbround', r: b.round, n: BB.ROUNDS, obj: o.id, name: o.name, tiles: b.tiles, ms: BB.ROUND_MS, scores: bbScores(room) });
+  clearTimeout(b.timer); b.timer = setTimeout(() => bbReveal(room), BB.ROUND_MS);
+}
+const bbScores = (room) => Object.fromEntries(room.players.map((p) => [p.idx, p.bbTotal || 0]));
+function bbCheckAll(room) {
+  const b = room.bb; if (!b || b.phase !== 'play') return;
+  const here_ = here(room); if (here_.length && here_.every((p) => p.bb && p.bb.ans >= 0)) { clearTimeout(b.timer); b.timer = setTimeout(() => bbReveal(room), 700); }
+}
+function bbReveal(room) {
+  const b = room.bb; if (!b || b.phase !== 'play' || room.state !== 'play') return;
+  b.phase = 'reveal'; clearTimeout(b.timer);
+  emit(room, { ev: 'bbreveal', correct: b.correct, scores: bbScores(room) });
+  b.timer = setTimeout(() => { if (b.round >= BB.ROUNDS) endMini(room); else bbRound(room); }, BB.REVEAL_MS);
+}
+function bbAward(room) { room.players.forEach((p) => { p.score += p.bbTotal || 0; }); room.bb.live = false; }
 
 // ---------- Number Sniper ----------
 // Everyone wanders a square arena with a secret-ish 4-digit number over their head. The number is only readable while the player stands
@@ -639,6 +692,7 @@ function endMini(room) {
   if (room.copy) copyAward(room);
   if (room.pf && room.pf.live) pfAward(room);
   if (room.ns && room.ns.live) nsAward(room);
+  if (room.bb && room.bb.live) bbAward(room);
   miniCleanup(room);
   room.players.forEach((p) => { p.gained = p.score - p.prev; });
   enterStandings(room);
@@ -656,6 +710,7 @@ function advance(room) {
 }
 // A roster change (someone left or went away): can the game carry on without them?
 function settle(room) {
+  if (room.state === 'play' && room.bb && room.bb.live) bbCheckAll(room);
   if (room.state === 'play' && room.ns && room.ns.live) nsCheckEnd(room);
   if (room.state === 'play' && room.pf && room.pf.live && here(room).length < 2) return endMini(room);
   if (room.state === 'play' && room.pic && room.pic.live) {
@@ -688,6 +743,7 @@ function goAway(ws) {
 }
 // Bring a returning player up to date with things that are not part of the normal state message.
 function resync(room, p) {
+  if (room.state === 'play' && room.bb && room.bb.live && room.bb.phase !== 'idle') { const b = room.bb; send(p.ws, { type: 'ev', ev: 'bbsync', r: b.round, n: BB.ROUNDS, obj: b.obj.id, name: b.obj.name, tiles: b.tiles, ms: Math.max(0, BB.ROUND_MS - (Date.now() - b.startAt)), phase: b.phase, correct: b.phase === 'reveal' ? b.correct : -1, mine: p.bb ? p.bb.ans : -1, scores: bbScores(room) }); }
   if (room.state === 'play' && room.pf && room.pf.live) send(p.ws, { type: 'ev', ev: 'pfsync', sc: pfScores(room), pies: room.pf.pies.map((x) => ({ id: x.id, x: Math.round(x.x), y: Math.round(x.y), dx: x.dx, dy: x.dy, sp: PF.PIE_SPEED })) });
   if (room.state === 'play' && room.bomb) send(p.ws, { type: 'ev', ev: 'bstate', holder: room.bomb.holder ? room.bomb.holder.idx : -1, alive: bombIdx(room), n: room.bomb.out.length });
   if (room.state === 'play' && room.copy && room.copy.phase !== 'idle') { const c = room.copy; send(p.ws, { type: 'ev', ev: 'ccsync', r: c.round, phase: c.phase, seq: c.seq.slice(0, c.len), i: p.cc ? p.cc.i : 0, done: !!(p.cc && p.cc.done), alive: copyAliveIdx(room), scores: copyScores(room), finished: room.players.filter((q) => q.cc && q.cc.done).map((q) => ({ i: q.idx, rank: q.cc.rank, pts: q.cc.pts })) }); }
@@ -828,6 +884,16 @@ const ACTIONS = {
       emit(room, { ev: 'picguess', name: p.name, text: raw.slice(0, 24) });
       if (w.length >= 4 && g.length >= 3 && lev1(g, w)) send(ws, { type: 'ev', ev: 'picclose' });
     }
+  },
+  bbpick(ws, m) {   // Brain Bash: a tile tapped
+    const room = ws.room, p = ws.player, b = room && room.bb; if (!b || room.state !== 'play' || b.phase !== 'play' || !p.bb || p.bb.ans >= 0 || p.away) return;
+    const i = m.i | 0; if (i < 0 || i >= b.tiles.length) return;
+    p.bb.ans = i;
+    if (i === b.correct) {                                                                // faster = more: 10 points for an instant tap down to 1 at the buzzer
+      const pts = Math.max(1, Math.round(10 * (1 - (Date.now() - b.startAt) / BB.ROUND_MS))); p.bb.pts = pts; p.bbTotal += pts;
+      send(ws, { type: 'ev', ev: 'bbok', i, pts }); emit(room, { ev: 'bbans', i: p.idx, ok: true, pts, total: p.bbTotal });
+    } else { send(ws, { type: 'ev', ev: 'bbbad', i }); emit(room, { ev: 'bbans', i: p.idx, ok: false, pts: 0, total: p.bbTotal }); }
+    bbCheckAll(room);
   },
   nsfire(ws, m) {   // Number Sniper: a 4-digit number typed in
     const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.ns || !room.ns.live || !p.ns || !p.ns.alive || p.away) return;

@@ -300,6 +300,81 @@
     anim = { stop() { timers.forEach(clearTimeout); ivs.forEach(clearInterval); try { speechSynthesis.cancel(); } catch (e) { } } };
   }
 
+  // ---- Brain Bash: tap the copy of the object that is the RIGHT colour; the colour words underneath are lies ----
+  const BBHEX = { red: '#E53935', orange: '#FB8C00', yellow: '#FDD835', green: '#43A047', blue: '#1E88E5', purple: '#8E24AA', pink: '#F48FB1', brown: '#6D4C41', black: '#212121', white: '#ffffff' };
+  function bbSvg(obj, f, o) {
+    const F = BBHEX[f], O = BBHEX[o], st = `fill="${F}" stroke="${O}" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"`, ln = `fill="none" stroke="${O}" stroke-width="4" stroke-linecap="round"`;
+    let b = '';
+    switch (obj) {
+      case 'banana': b = `<path ${st} d="M16 30 Q28 80 78 80 Q92 80 88 66 Q60 68 42 42 Q36 24 26 20 Q14 20 16 30 Z"/>`; break;
+      case 'carrot': b = `<path ${st} d="M24 26 Q50 8 76 26 Q62 60 50 94 Q38 60 24 26 Z"/><path ${ln} d="M38 36 L48 38 M56 52 L64 50 M46 66 L54 66"/>`; break;
+      case 'leaf': b = `<path ${st} d="M50 92 Q8 62 18 20 Q60 8 84 30 Q94 72 50 92 Z"/><path ${ln} d="M50 92 Q46 60 30 36"/>`; break;
+      case 'sun': { let p = ''; for (let k = 0; k < 16; k++) { const a = k * Math.PI / 8, r = k % 2 ? 30 : 46; p += `${k ? 'L' : 'M'}${(50 + r * Math.cos(a)).toFixed(1)} ${(50 + r * Math.sin(a)).toFixed(1)} `; } b = `<path ${st} d="${p}Z"/>`; break; }
+      case 'drop': b = `<path ${st} d="M50 8 Q86 52 80 66 A30 30 0 0 1 20 66 Q14 52 50 8 Z"/>`; break;
+      case 'grapes': b = [[34, 36], [58, 36], [24, 56], [46, 56], [68, 56], [34, 76], [58, 76], [46, 92]].map(([x, y]) => `<circle ${st} cx="${x}" cy="${y - 8}" r="12"/>`).join('') + `<path ${ln} d="M46 18 Q50 8 60 6"/>`; break;
+      case 'tomato': b = `<circle ${st} cx="50" cy="56" r="34"/><path ${ln} d="M36 26 L50 36 L64 26 M50 36 L50 20"/>`; break;
+      case 'pumpkin': b = `<ellipse ${st} cx="50" cy="56" rx="40" ry="32"/><path ${ln} d="M36 28 Q26 56 36 84 M64 28 Q74 56 64 84 M50 26 L50 10"/>`; break;
+      case 'lemon': b = `<path ${st} d="M6 50 Q30 16 50 16 Q70 16 94 50 Q70 84 50 84 Q30 84 6 50 Z"/>`; break;
+      case 'cherry': b = `<path ${ln} d="M30 70 Q40 30 66 10 M70 72 Q70 36 66 10"/><circle ${st} cx="30" cy="72" r="17"/><circle ${st} cx="70" cy="74" r="17"/>`; break;
+      case 'heart': b = `<path ${st} d="M50 90 L10 48 A22 22 0 0 1 50 24 A22 22 0 0 1 90 48 Z"/>`; break;
+      case 'fish': b = `<path ${st} d="M8 50 Q34 14 62 34 L92 16 L84 50 L92 84 L62 66 Q34 86 8 50 Z"/><circle cx="28" cy="46" r="4" fill="${O}"/>`; break;
+      case 'bear': b = `<circle ${st} cx="24" cy="26" r="14"/><circle ${st} cx="76" cy="26" r="14"/><circle ${st} cx="50" cy="54" r="38"/><circle cx="36" cy="46" r="4.5" fill="${O}"/><circle cx="64" cy="46" r="4.5" fill="${O}"/><ellipse cx="50" cy="64" rx="7" ry="5" fill="${O}"/>`; break;
+      case 'pig': b = `<path ${st} d="M20 36 L18 12 L40 24 Z M80 36 L82 12 L60 24 Z"/><circle ${st} cx="50" cy="54" r="38"/><ellipse ${ln} cx="50" cy="62" rx="15" ry="11"/><circle cx="44" cy="62" r="3" fill="${O}"/><circle cx="56" cy="62" r="3" fill="${O}"/><circle cx="34" cy="44" r="4" fill="${O}"/><circle cx="66" cy="44" r="4" fill="${O}"/>`; break;
+      case 'acorn': b = `<path ${st} d="M22 44 Q22 90 50 94 Q78 90 78 44 Z"/><path ${st} d="M16 46 Q16 18 50 18 Q84 18 84 46 Z"/><path ${ln} d="M50 18 L50 6"/>`; break;
+      case 'eggplant': b = `<path ${st} d="M62 22 Q94 42 72 72 Q50 98 26 84 Q8 66 34 44 Q50 32 62 22 Z"/><path ${st} d="M56 26 L74 10 L82 28 Z"/>`; break;
+    }
+    return `<svg viewBox="0 0 100 100" aria-hidden="true">${b}</svg>`;
+  }
+  function renderBb() {
+    const g = S.mini, me = S.you.name, cars = g.cars, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
+    let raf = 0, phase = 'wait', startAt = 0, ms = 1, answered = false, scores = {}, ans = {};
+    const timers = [];
+    app.innerHTML = `<div class="timer"><div id="bar"></div></div>
+      <div class="hud rchud"><span id="bbstat">Get ready…</span><span id="bbme">You: 0</span></div>
+      <div class="bbask" id="bbask">&nbsp;</div>
+      <div class="bbgrid" id="bbgrid"></div>
+      <div class="bbplayers" id="bbpl"></div>`;
+    const grid = document.getElementById('bbgrid'), bar = document.getElementById('bar'), ask = document.getElementById('bbask');
+    const stat = (t) => { document.getElementById('bbstat').textContent = t; };
+    const board = () => {
+      document.getElementById('bbme').textContent = `You: ${scores[myId] || 0}`;
+      document.getElementById('bbpl').innerHTML = cars.slice().sort((a, b) => (scores[b.i] || 0) - (scores[a.i] || 0)).map((c) => `<div class="bbp ${c.i === myId ? 'me' : ''} ${ans[c.i] === true ? 'ok' : ans[c.i] === false ? 'bad' : ''}">${faceImg(c.av)}<b>${esc(c.name)}</b><span>${ans[c.i] === true ? '✓ ' : ans[c.i] === false ? '✗ ' : ''}${scores[c.i] || 0}</span></div>`).join('');
+    };
+    const setRound = (ev, remaining, state) => {
+      phase = state || 'play'; ms = ev.ms; startAt = performance.now() - (ev.full === false ? 0 : 0) - (ms - remaining); answered = false; ans = {}; scores = ev.scores || scores;
+      ask.innerHTML = `Round ${ev.r}/${ev.n} — tap the <b>${esc(ev.name)}</b> that is the <b>RIGHT color</b>!`;
+      grid.innerHTML = ev.tiles.map((t, i) => `<button class="bbtile" data-i="${i}" ${phase === 'play' ? '' : 'disabled'}>${bbSvg(ev.obj, t.f, t.o)}<span class="bbw" style="color:${BBHEX[t.wc]};--sh:${t.wc === 'black' ? '#fff' : '#111'}">${esc(t.w.toUpperCase())}</span></button>`).join('');
+      stat('Go!'); board();
+    };
+    grid.addEventListener('click', (e) => {
+      const b = e.target.closest('.bbtile'); if (!b || phase !== 'play' || answered) return;
+      answered = true; send({ action: 'bbpick', i: +b.dataset.i }); b.classList.add('picked');
+      grid.querySelectorAll('.bbtile').forEach((x) => { x.disabled = true; });
+    });
+    const frame = (now) => { raf = requestAnimationFrame(frame); bar.style.width = phase === 'play' ? Math.max(0, 100 - ((now - startAt) / ms) * 100) + '%' : '100%'; };
+    raf = requestAnimationFrame(frame);
+    const reveal = (correct) => {
+      phase = 'reveal'; grid.querySelectorAll('.bbtile').forEach((x, i) => { x.disabled = true; if (i === correct) x.classList.add('right'); });
+      if (!answered) { stat("Time's up!"); Sfx.play('buzzer'); bigX("Time's up!"); } else stat('Next…'); board();
+    };
+    board();
+    live = {
+      onEvent(ev) {
+        if (ev.ev === 'bbround') setRound(ev, ev.ms);
+        else if (ev.ev === 'bbsync') {
+          setRound(ev, ev.ms, ev.phase === 'play' ? 'play' : 'reveal');
+          if (ev.mine >= 0) { answered = true; const t = grid.children[ev.mine]; if (t) t.classList.add('picked'); grid.querySelectorAll('.bbtile').forEach((x) => { x.disabled = true; }); }
+          if (ev.phase === 'reveal') reveal(ev.correct);
+        }
+        else if (ev.ev === 'bbok') { const t = grid.children[ev.i]; if (t) t.classList.add('right'); Sfx.play('correct'); stat(`✅ +${ev.pts}`); }
+        else if (ev.ev === 'bbbad') { const t = grid.children[ev.i]; if (t) { t.classList.add('wrong'); t.insertAdjacentHTML('beforeend', '<i class="bbx">✗</i>'); } Sfx.play('buzzer'); bigX('Wrong!'); stat('❌ Wrong'); }
+        else if (ev.ev === 'bbans') { ans[ev.i] = ev.ok; if (typeof ev.total === 'number') scores[ev.i] = ev.total; board(); }
+        else if (ev.ev === 'bbreveal') { scores = ev.scores || scores; reveal(ev.correct); }
+      },
+      stop() { cancelAnimationFrame(raf); timers.forEach(clearTimeout); },
+    };
+  }
+
   // ---- Number Sniper: read the number over a player when they stop, type it to eliminate them ----
   function renderNs() {
     const g = S.mini, me = S.you.name, cars = g.cars, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
@@ -1070,7 +1145,7 @@
       const key = S.state + ':' + S.code + ':' + S.mini.index;
       if (key === liveKey) return;
       liveKey = key; stopLive(); stopAnim(); standKey = null;
-      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : S.mini.game === 'bomb' ? renderBomb() : S.mini.game === 'copy' ? renderCopy() : S.mini.game === 'pf' ? renderPf() : S.mini.game === 'ns' ? renderNs() : renderPlay();
+      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : S.mini.game === 'bomb' ? renderBomb() : S.mini.game === 'copy' ? renderCopy() : S.mini.game === 'pf' ? renderPf() : S.mini.game === 'ns' ? renderNs() : S.mini.game === 'bb' ? renderBb() : renderPlay();
     }
     liveKey = null; stopLive();
     if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)
