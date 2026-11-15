@@ -179,3 +179,12 @@ button.small { padding:9px; font-size:.85rem; }
 @keyframes clapR { from { transform:rotate(38deg); } to { transform:rotate(62deg); } }
 .confetti { position:absolute; top:-14px; width:8px; height:13px; border-radius:2px; z-index:3; animation:fall linear 2 both; pointer-events:none; }
 @keyframes fall { 0% { top:-14px; opacity:1; } 100% { top:105%; opacity:.9; margin-left:24px; } }
+
+/* ---- whack-a-mole: empty-square penalty ---- */
+.missx { position:absolute; inset:0; z-index:4; pointer-events:none; display:flex; align-items:center; justify-content:center; background:rgba(170,0,0,.38); animation:missin .18s ease-out; }
+.missx svg { position:absolute; inset:8%; width:84%; height:84%; filter:drop-shadow(0 0 6px rgba(255,0,0,.8)); }
+.missx line { stroke:#ff1f1f; stroke-width:15; stroke-linecap:round; }
+.missx b { position:relative; font-size:2.1rem; font-weight:900; color:#fff; text-shadow:0 0 6px #7a0000, 0 3px 0 #7a0000, 2px 0 0 #7a0000, -2px 0 0 #7a0000, 0 -2px 0 #7a0000; font-family:'Arial Rounded MT Bold','Baloo 2','Nunito',system-ui,sans-serif; }
+@keyframes missin { from { transform:scale(1.5); opacity:0; } to { transform:scale(1); opacity:1; } }
+.field.locked .hole:not(:has(.mole)) { filter:saturate(.55) brightness(.82); }   /* only empty squares look locked; moles stay bright and tappable */
+.gain.neg { color:#ff8a8a; }

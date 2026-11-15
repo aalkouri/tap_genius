@@ -139,12 +139,25 @@
       <div class="field" id="field">${Array.from({ length: g.cells }, (_, i) => `<div class="hole" data-cell="${i}"><div class="mound"></div><div class="pit"></div><div class="burrow"></div></div>`).join('')}</div>`;
     const field = document.getElementById('field'), bar = document.getElementById('bar');
     const moles = new Map(), hits = {}, done = new Set(), t0 = Date.now();
+    S.players.forEach((pl) => { hits[pl.name] = 0; });      // everyone starts the round on 0, so the leader shown is right even after misses
     const barTimer = setInterval(() => { bar.style.width = Math.max(0, 100 - ((Date.now() - t0) / g.ms) * 100) + '%'; }, 100);
     const drop = (id, delay) => { const m = moles.get(id); if (!m) return; moles.delete(id); clearTimeout(m.timer); m.el.classList.remove('up'); setTimeout(() => m.el.remove(), delay); };
+    const whack = (el) => { if (el.classList.contains('tapped')) return; el.classList.add('tapped'); send({ action: 'whack', id: +el.dataset.id }); };
+    // Tapping a square: if a mole is up in it, that counts as tapping the mole. An empty square is a miss (-1, 1s lockout).
+    let lockUntil = 0, pending = 0;
+    field.addEventListener('pointerdown', (e) => {
+      const hole = e.target.closest('.hole'); if (!hole) return;
+      e.preventDefault();
+      const up = hole.querySelector('.mole.up:not(.bonked)');
+      if (up) return whack(up);
+      if (hole.querySelector('.mole')) return;              // one is just leaving: not a miss
+      const now = Date.now(); if (now < lockUntil || now < pending) return;
+      pending = now + 250; send({ action: 'miss', cell: +hole.dataset.cell });
+    });
     const hud = () => {
       document.getElementById('myhits').textContent = `You: ${hits[me] || 0}`;
       const top = Object.entries(hits).sort((a, b) => b[1] - a[1])[0];
-      document.getElementById('lead').textContent = top ? `👑 ${top[0]} ${top[1]}` : '';
+      document.getElementById('lead').textContent = top && top[1] > 0 ? `👑 ${top[0]} ${top[1]}` : '';
     };
     live = {
       onEvent(ev) {
@@ -152,10 +165,20 @@
           const hole = field.children[ev.cell]; if (!hole) return;
           const el = document.createElement('div'); el.className = 'mole'; el.dataset.id = ev.id;
           el.innerHTML = `${MOLE_SVG}<div class="mface"${ev.av ? ` style="background-image:url(/avatar/${ev.av}.jpg)"` : ''}></div>`;   // a random player's head
-          el.addEventListener('pointerdown', (e) => { e.preventDefault(); if (el.classList.contains('tapped')) return; el.classList.add('tapped'); send({ action: 'whack', id: ev.id }); });
+          el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); whack(el); });
           hole.querySelector('.burrow').appendChild(el); void el.offsetWidth; el.classList.add('up');
           moles.set(ev.id, { el, timer: setTimeout(() => drop(ev.id, 180), ev.ttl) });
           Sfx.play('pop');
+        } else if (ev.ev === 'miss') {
+          hits[ev.by] = ev.n; hud();
+          if (ev.by !== me) return;
+          lockUntil = Date.now() + 1000;
+          Sfx.play('buzzer'); app.classList.remove('shake'); void app.offsetWidth; app.classList.add('shake');
+          const hole = field.children[ev.cell]; if (!hole) return;
+          const x = document.createElement('div'); x.className = 'missx';
+          x.innerHTML = '<svg viewBox="0 0 100 100" aria-hidden="true"><line x1="16" y1="16" x2="84" y2="84"/><line x1="84" y1="16" x2="16" y2="84"/></svg><b>-1</b>';
+          hole.appendChild(x); field.classList.add('locked');
+          setTimeout(() => { x.remove(); if (Date.now() >= lockUntil) field.classList.remove('locked'); }, 1000);
         } else if (ev.ev === 'hit') {
           if (done.has(ev.id)) return; done.add(ev.id);                     // never count a mole twice
           hits[ev.by] = ev.n !== undefined ? ev.n : (hits[ev.by] || 0) + 1; hud();   // show the server's count
@@ -241,7 +264,7 @@
           ${faceImg(r.av)}
           <div class="nm">${esc(r.name)}${r.you ? ' <small>(you)</small>' : ''}</div>
           <span class="rdy" title="Ready">✓</span>
-          <div class="pts"><span class="sc">${r.prev}</span>${r.gained > 0 ? `<span class="gain">+${r.gained}</span>` : ''}</div>
+          <div class="pts"><span class="sc">${r.prev}</span>${r.gained ? `<span class="gain${r.gained < 0 ? ' neg' : ''}">${r.gained > 0 ? '+' : ''}${r.gained}</span>` : ''}</div>
         </div>`).join('')}</div>
       <p class="muted" id="rdycount"></p>
       <button id="ready" disabled>Ready</button>
@@ -262,7 +285,7 @@
         if (stopped) return;
         const p = Math.min(1, (now - t0) / COUNT_MS), e = 1 - Math.pow(1 - p, 3);
         els.forEach((el, i) => { const r = rows[i]; el.querySelector('.sc').textContent = Math.round(r.prev + (r.score - r.prev) * e); });
-        const st = Math.floor(p * 24); if (st !== lastStep && p < 1 && rows.some((r) => r.gained > 0)) { lastStep = st; Sfx.play('count', p); }
+        const st = Math.floor(p * 24); if (st !== lastStep && p < 1 && rows.some((r) => r.gained)) { lastStep = st; Sfx.play('count', p); }
         if (p < 1) raf = requestAnimationFrame(step);
       };
       raf = requestAnimationFrame(step);

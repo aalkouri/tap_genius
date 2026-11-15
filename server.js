@@ -69,6 +69,7 @@ const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
 };
 const MINI_ROUNDS = 3, COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
+const MISS_LOCK_MS = 1000, MISS_GRACE_MS = 450;   // empty-square penalty: 1s lockout; no penalty right after a mole leaves that square
 const HOLE_REST_MS = 1500;   // after a mole leaves a hole (whacked or not), that hole stays empty this long
 const rooms = new Map(); // code -> room
 
@@ -199,6 +200,8 @@ function playMini(room) {
   const g = MINI[room.order[room.qIndex]];
   room.state = 'play'; room.playStart = Date.now(); room.moles = new Map(); room.moleSeq = 0;
   room.holeFree = Array(CELLS).fill(0);   // per hole: time from which a new mole may use it
+  room.holeEnd = Array(CELLS).fill(0);    // per hole: when its last mole left (whacked or timed out)
+  room.players.forEach((p) => { p.missUntil = 0; });
   broadcast(room);
   room.spawnTimer = setTimeout(() => spawnMoles(room), 500);
   room.timer = setTimeout(() => endMini(room), g.ms);
@@ -220,6 +223,7 @@ function spawnMoles(room) {
   for (let i = 0; i < n && free.length; i++) {
     const id = ++room.moleSeq, cell = free.pop();
     room.holeFree[cell] = now + ttl + HOLE_REST_MS;
+    room.holeEnd[cell] = now + ttl;
     room.moles.set(id, { cell, exp: now + ttl, hit: false });
     const who = room.players[Math.floor(Math.random() * room.players.length)];   // whose head pops up
     emit(room, { ev: 'spawn', id, cell, ttl, av: who.av });
@@ -319,7 +323,17 @@ const ACTIONS = {
     if (!mole || mole.hit || Date.now() > mole.exp + 150) return;
     mole.hit = true; p.score += 1;                      // exactly one point per mole: `hit` can only be set once
     room.holeFree[mole.cell] = Date.now() + HOLE_REST_MS;
+    room.holeEnd[mole.cell] = Date.now();
     emit(room, { ev: 'hit', id: m.id, by: p.name, n: p.score - p.prev });   // n = that player's points this round (authoritative)
+  },
+  miss(ws, m) {    // whack-a-mole: tapping an empty square costs a point and locks out more empty taps for a second
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play') return;
+    const cell = m.cell, now = Date.now();
+    if (!Number.isInteger(cell) || cell < 0 || cell >= CELLS || now < (p.missUntil || 0)) return;
+    for (const mo of room.moles.values()) if (mo.cell === cell && !mo.hit && now <= mo.exp) return;   // a mole is up there: not empty
+    if (now < room.holeEnd[cell] + MISS_GRACE_MS) return;                                              // a mole only just left: near miss, no penalty
+    p.missUntil = now + MISS_LOCK_MS; p.score -= 1;
+    emit(room, { ev: 'miss', by: p.name, cell, n: p.score - p.prev });
   },
   ready(ws) {  // standings: this player is ready; the last one to tap starts the next question
     const room = ws.room, p = ws.player; if (!room || room.state !== 'standings' || p.ready) return;
