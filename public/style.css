@@ -292,3 +292,14 @@ button.small { padding:9px; font-size:.85rem; }
 .ccs.done { color:#7dffa6; opacity:1; animation:pop .45s; } .ccs.done b { background:#2ecc71; color:#06331a; border-radius:8px; padding:1px 6px; margin-left:3px; }
 .ccs.out { color:#ff9a9a; }
 .srow.cc.isout { opacity:.5; }
+
+/* ---- Pie Fight ---- */
+#pfv { display:block; margin:6px auto 0; border-radius:14px; touch-action:none; box-shadow:0 5px 0 rgba(2,18,56,.55); }
+.pfpad { display:flex; gap:12px; margin-top:12px; touch-action:none; user-select:none; -webkit-user-select:none; }
+.pfmoves { display:flex; gap:10px; flex:1.25; }
+.pfb { flex:1; height:92px; margin:0; font-size:2.2rem; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; position:relative; overflow:hidden; }
+.pfb.mv { background:linear-gradient(180deg,#6bb5ff,#2a6fe0); color:#fff; box-shadow:0 6px 0 #123f94; }
+.pfb.throw { font-size:1.45rem; letter-spacing:.03em; flex:1; }
+.pfb.throw::after { content:''; position:absolute; left:0; right:0; bottom:0; height:var(--cd, 0%); background:rgba(40,20,0,.5); pointer-events:none; }
+.pfb.throw.cool { filter:saturate(.7); }
+.pfb.held { transform:translateY(5px); box-shadow:0 1px 0 #0003; filter:brightness(1.12); }

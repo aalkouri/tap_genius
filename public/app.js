@@ -300,6 +300,134 @@
     anim = { stop() { timers.forEach(clearTimeout); ivs.forEach(clearInterval); try { speechSynthesis.cancel(); } catch (e) { } } };
   }
 
+  // ---- Pie Fight: everyone rides the edge of a square arena; throw pies across it at faces ----
+  function renderPf() {
+    const g = S.mini, me = S.you.name, cars = g.cars, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
+    app.innerHTML = `<div class="timer"><div id="bar"></div></div>
+      <div class="hud rchud"><span id="pfme">You: 0</span><span id="pflead"></span></div>
+      <canvas id="pfv"></canvas>
+      <div class="pfpad"><div class="pfmoves"><button class="pfb mv" id="pfl" aria-label="Run left">◀</button><button class="pfb mv" id="pfr" aria-label="Run right">▶</button></div>
+        <button class="pfb throw" id="pft">🥧 THROW</button></div>`;
+    const cv = document.getElementById('pfv'), ctx = cv.getContext('2d'), bar = document.getElementById('bar'), tbtn = document.getElementById('pft');
+    const now0 = performance.now(), imgs = {}, state = new Map(), pies = new Map(), splats = [], floats = [], score = {};
+    cars.forEach((c) => { score[c.i] = 0; state.set(c.i, { ...c, dt: c.t, dir: 0, lock: 0, stun: 0, at: now0, windAt: -1e9, hitAt: -1e9 }); if (c.av) { const im = new Image(); im.src = `/avatar/${c.av}.jpg`; imgs[c.i] = im; } });
+    let W = 0, dpr = 1, raf = 0, floor = null;
+    const PT = (t) => { t = ((t % 4000) + 4000) % 4000; const sd = Math.floor(t / 1000), u = t - sd * 1000; return sd === 0 ? [u, 0] : sd === 1 ? [1000, u] : sd === 2 ? [1000 - u, 1000] : [0, 1000 - u]; };
+    const NM = (t) => [[0, 1], [-1, 0], [0, -1], [1, 0]][Math.floor((((t % 4000) + 4000) % 4000) / 1000)];
+    let I = 0, SC = 0;
+    const px = (x, y) => [I + x * SC, I + y * SC];
+    const size = () => {
+      dpr = Math.min(2, window.devicePixelRatio || 1); W = Math.max(240, Math.min(app.clientWidth, 560, window.innerHeight - 290));
+      cv.style.width = W + 'px'; cv.style.height = W + 'px'; cv.width = Math.round(W * dpr); cv.height = Math.round(W * dpr);
+      I = W * 0.085; SC = (W - 2 * I) / 1000;
+      floor = document.createElement('canvas'); floor.width = cv.width; floor.height = cv.height;           // the tiled floor never changes: draw it once
+      const f = floor.getContext('2d'); f.scale(dpr, dpr); const n = 10, ts = W / n;
+      for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) { f.fillStyle = (r + q) % 2 ? '#f7e6bd' : '#fff3d1'; f.fillRect(q * ts, r * ts, ts + 1, ts + 1); }
+      f.strokeStyle = 'rgba(120,70,20,.35)'; f.lineWidth = 2; f.setLineDash([6, 8]); f.strokeRect(I, I, W - 2 * I, W - 2 * I);   // the track everyone runs on
+      f.setLineDash([]); f.lineWidth = 6; f.strokeStyle = '#8a5a2b'; f.strokeRect(1.5, 1.5, W - 3, W - 3);
+      f.font = `900 ${W * 0.11}px system-ui,sans-serif`; f.fillStyle = 'rgba(160,110,50,.18)'; f.textAlign = 'center'; f.fillText('PIE FIGHT', W / 2, W / 2 + W * 0.04);
+    };
+    size(); window.addEventListener('resize', size);
+
+    const drawPie = (x, y, r, rot) => {
+      ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+      ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(2, r * 0.9, r, r * 0.35, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#b8742a'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#8a531a'; ctx.lineWidth = Math.max(1, r * 0.12); ctx.setLineDash([r * 0.25, r * 0.2]); ctx.beginPath(); ctx.arc(0, 0, r * 0.95, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#fffaf0'; ctx.beginPath(); ctx.arc(0, 0, r * 0.78, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#f0dcc0'; ctx.lineWidth = Math.max(1, r * 0.1); ctx.beginPath(); ctx.arc(0, 0, r * 0.45, 0.4, 5.6); ctx.stroke();
+      ctx.fillStyle = '#e53935'; ctx.beginPath(); ctx.arc(-r * 0.1, -r * 0.12, r * 0.18, 0, 7); ctx.fill();
+      ctx.restore();
+    };
+    const splat = (x, y, r, seed) => {                                    // a cream splat on the floor
+      ctx.save(); ctx.translate(x, y); ctx.fillStyle = seed % 3 === 0 ? '#ffe9f0' : seed % 3 === 1 ? '#fffdf5' : '#fff3c4'; ctx.strokeStyle = 'rgba(160,110,50,.25)'; ctx.lineWidth = 1;
+      ctx.beginPath(); for (let k = 0; k < 9; k++) { const a = (k / 9) * Math.PI * 2, rr = r * (0.7 + ((seed * (k + 3)) % 7) / 10); ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath(); ctx.fill(); ctx.stroke();
+      for (let k = 0; k < 4; k++) { const a = (k * 1.7 + seed), d = r * 1.25; ctx.beginPath(); ctx.arc(Math.cos(a) * d, Math.sin(a) * d, r * 0.18, 0, 7); ctx.fill(); }
+      ctx.restore();
+    };
+    const drawHead = (c, now) => {
+      const [bx, by] = PT(c.dt), nrm = NM(c.dt), [cx, cy] = px(bx, by), hw = W * 0.115, hh = hw * 1.28;
+      const wind = now - c.windAt, windP = wind / 1500;
+      let lean = 0; if (windP >= 0 && windP < 1) lean = (wind < 350 ? -(wind / 350) * 0.5 : Math.sin(Math.min(1, (wind - 350) / 250) * Math.PI) * 1.1) * hw * 0.22;   // pulls back, then lunges at the throw
+      const x = cx + nrm[0] * lean * 1.0, y = cy + nrm[1] * lean;
+      const hitAge = Math.max(0, now - c.hitAt), stunned = now - c.hitAt < 1400, mineC = c.i === myId;      // (the hit message can arrive a hair before the next frame: never go negative)
+      // arm + pie held while winding up
+      if (wind >= 0 && wind < 350) { const ax = x + nrm[0] * hh * 0.62, ay = y + nrm[1] * hh * 0.62; ctx.strokeStyle = '#f2c9a0'; ctx.lineWidth = hw * 0.16; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ax, ay); ctx.stroke(); drawPie(ax, ay, hw * 0.34, wind / 90); }
+      ctx.save(); if (stunned) ctx.translate(Math.sin(now / 30) * 1.5, 0);
+      ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.beginPath(); ctx.ellipse(x + 2, y + hh * 0.46, hw * 0.45, hh * 0.12, 0, 0, 7); ctx.fill();
+      ctx.save(); ctx.beginPath(); ctx.ellipse(x, y, hw / 2, hh / 2, 0, 0, 7); ctx.clip();
+      const im = imgs[c.i]; if (im && im.complete && im.naturalWidth) ctx.drawImage(im, x - hw / 2, y - hh / 2, hw, hh); else { ctx.fillStyle = '#c89a6b'; ctx.fillRect(x - hw / 2, y - hh / 2, hw, hh); }
+      if (stunned) {                                                      // cream in the face
+        const k = Math.min(1, hitAge / 150); ctx.fillStyle = '#fffdf5'; ctx.beginPath(); ctx.arc(x, y - hh * 0.04, hw * 0.46 * k, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(x - hw * 0.28, y + hh * 0.1, hw * 0.2 * k, 0, 7); ctx.arc(x + hw * 0.3, y - hh * 0.2, hw * 0.18 * k, 0, 7); ctx.fill();
+        ctx.fillStyle = '#fff'; for (let j = 0; j < 3; j++) { const dx = x - hw * 0.3 + j * hw * 0.3, drip = (hh * 0.35) * Math.min(1, hitAge / 900); ctx.beginPath(); ctx.roundRect(dx - hw * 0.05, y, hw * 0.1, drip * (0.6 + 0.4 * ((j * 7) % 3) / 2), hw * 0.05); ctx.fill(); }
+        ctx.fillStyle = '#e53935'; ctx.beginPath(); ctx.arc(x + hw * 0.05, y - hh * 0.3, hw * 0.07, 0, 7); ctx.fill();
+      }
+      ctx.restore();
+      ctx.lineWidth = mineC ? 3 : 2; ctx.strokeStyle = mineC ? '#ffd35a' : 'rgba(255,255,255,.9)'; ctx.beginPath(); ctx.ellipse(x, y, hw / 2, hh / 2, 0, 0, 7); ctx.stroke();
+      ctx.restore();
+      if (stunned) { ctx.font = `${hw * 0.3}px system-ui`; ctx.textAlign = 'center'; for (let j = 0; j < 3; j++) { const a = now / 160 + j * 2.1; ctx.fillText('✨', x + Math.cos(a) * hw * 0.55, y - hh * 0.55 + Math.sin(a) * 4); } }
+      // reload ring around the head while the 1.5 s freeze runs
+      if (windP >= 0 && windP < 1) { ctx.strokeStyle = 'rgba(255,170,30,.95)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, hh * 0.62, -Math.PI / 2, -Math.PI / 2 + (1 - windP) * Math.PI * 2); ctx.stroke(); }
+      // name tag toward the middle of the arena
+      ctx.font = `800 ${Math.max(9, W * 0.028)}px system-ui,sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const lx = x + nrm[0] * (hh * 0.78), ly = y + nrm[1] * (hh * 0.78); const label = mineC ? 'YOU' : c.name.slice(0, 9); const tw = ctx.measureText(label).width;
+      ctx.fillStyle = mineC ? '#ffd35a' : 'rgba(40,20,0,.7)'; ctx.beginPath(); ctx.roundRect(lx - tw / 2 - 5, ly - 8, tw + 10, 16, 8); ctx.fill(); ctx.fillStyle = mineC ? '#3a2400' : '#fff'; ctx.fillText(label, lx, ly + 0.5);
+    };
+
+    // ---- controls: ◀ / ▶ are held, THROW is tapped (or A/D/arrow keys and space)
+    let L = false, R = false, lastD = 0;
+    const upd = () => { const d = (L ? 1 : 0) - (R ? 1 : 0); if (d !== lastD) { lastD = d; send({ action: 'pfmove', d }); } };       // left = clockwise around the arena
+    const hold = (el, set) => { el.addEventListener('pointerdown', (e) => { e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch (x) { } set(true); el.classList.add('held'); upd(); });
+      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((n) => el.addEventListener(n, () => { set(false); el.classList.remove('held'); upd(); })); el.addEventListener('contextmenu', (e) => e.preventDefault()); };
+    hold(document.getElementById('pfl'), (v) => { L = v; }); hold(document.getElementById('pfr'), (v) => { R = v; });
+    const doThrow = () => send({ action: 'pfthrow' });
+    tbtn.addEventListener('pointerdown', (e) => { e.preventDefault(); tbtn.classList.add('held'); doThrow(); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((n) => tbtn.addEventListener(n, () => tbtn.classList.remove('held'))); tbtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    const kd = (e) => { if (e.repeat) return; if (['ArrowLeft', 'KeyA'].includes(e.code)) { L = true; upd(); } else if (['ArrowRight', 'KeyD'].includes(e.code)) { R = true; upd(); } else if (['Space', 'Enter', 'ArrowUp', 'KeyW'].includes(e.code)) { e.preventDefault(); doThrow(); } };
+    const ku = (e) => { if (['ArrowLeft', 'KeyA'].includes(e.code)) { L = false; upd(); } else if (['ArrowRight', 'KeyD'].includes(e.code)) { R = false; upd(); } };
+    document.addEventListener('keydown', kd); document.addEventListener('keyup', ku);
+
+    const hud = () => { document.getElementById('pfme').textContent = `You: ${score[myId] || 0}`; const top = Object.entries(score).sort((a, b) => b[1] - a[1])[0]; const c = top && cars.find((x) => x.i === +top[0]); document.getElementById('pflead').textContent = c && top[1] > 0 ? `👑 ${c.name} ${top[1]}` : ''; };
+    const frame = (now) => {
+      raf = requestAnimationFrame(frame);
+      state.forEach((c) => {                                              // smooth the 30 Hz snapshots (and run around corners, never jumping)
+        const age = Math.min(100, now - c.at) / 1000, est = (c.t + (c.lock > 0 ? 0 : c.dir * 520 * age) + 4000) % 4000;
+        c.dt = (c.dt + (((est - c.dt + 6000) % 4000) - 2000) * 0.5 + 4000) % 4000;
+      });
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(floor, 0, 0, W, W);
+      splats.forEach((s) => { const [sx, sy] = px(s.x, s.y); splat(sx, sy, s.r * W / 360, s.seed); });
+      pies.forEach((p) => { const e = (now - p.t0) / 1000, x = p.x + p.dx * p.sp * e, y = p.y + p.dy * p.sp * e; const [sx, sy] = px(x, y); drawPie(sx, sy, W * 0.034, e * 14); });
+      const order = [...state.values()].sort((a, b) => PT(a.dt)[1] - PT(b.dt)[1]); order.forEach((c) => drawHead(c, now));
+      for (let k = floats.length - 1; k >= 0; k--) { const f = floats[k], a = (now - f.t0) / 1100; if (a >= 1) { floats.splice(k, 1); continue; } const [fx, fy] = px(f.x, f.y);
+        ctx.globalAlpha = 1 - a; ctx.font = `900 ${W * 0.07}px system-ui,sans-serif`; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.strokeText(f.text, fx, fy - a * 40); ctx.fillStyle = f.color; ctx.fillText(f.text, fx, fy - a * 40); ctx.globalAlpha = 1; }
+      bar.style.width = Math.max(0, 100 - ((now - now0) / g.ms) * 100) + '%';
+      const my = state.get(myId), cd = my ? Math.max(0, 1 - (now - my.windAt) / 1500) : 0; tbtn.style.setProperty('--cd', (cd * 100).toFixed(0) + '%'); tbtn.classList.toggle('cool', cd > 0);
+    };
+    raf = requestAnimationFrame(frame); hud();
+
+    live = {
+      onEvent(ev) {
+        const now = performance.now();
+        if (ev.ev === 'pf') { for (const [i, t, lock, stun, dir] of ev.c) { const c = state.get(i); if (!c) continue; c.t = t; c.lock = lock; c.stun = stun; c.dir = dir; c.at = now; } }
+        else if (ev.ev === 'pfwind') { const c = state.get(ev.i); if (c) c.windAt = now; }
+        else if (ev.ev === 'pfpie') { pies.set(ev.id, { x: ev.x, y: ev.y, dx: ev.dx, dy: ev.dy, sp: ev.sp, t0: now - 20 }); Sfx.play('pie', ev.i === myId ? 1 : 0.45); }
+        else if (ev.ev === 'pfland') { pies.delete(ev.id); splats.push({ x: ev.x, y: ev.y, r: 14 + (ev.id % 4) * 3, seed: ev.id }); if (splats.length > 60) splats.shift(); Sfx.play('splat', 0.7); }
+        else if (ev.ev === 'pfhit') {
+          pies.delete(ev.id); Object.assign(score, ev.sc); hud();
+          const v = state.get(ev.to), by = state.get(ev.by); if (v) v.hitAt = now;
+          floats.push({ x: ev.x, y: ev.y, text: '-1', color: '#e53935', t0: now });
+          if (by) { const [bx, by2] = PT(by.dt); floats.push({ x: bx, y: by2, text: '+1', color: '#2ecc71', t0: now }); }
+          Sfx.play('splat', 1);
+          if (ev.to === myId) { app.classList.remove('shake'); void app.offsetWidth; app.classList.add('shake'); Sfx.play('bonk'); } else if (ev.by === myId) Sfx.play('mine');
+        } else if (ev.ev === 'pfsync') {
+          Object.assign(score, ev.sc); pies.clear(); ev.pies.forEach((p) => pies.set(p.id, { x: p.x, y: p.y, dx: p.dx, dy: p.dy, sp: p.sp, t0: now })); hud();
+        }
+      },
+      stop() { cancelAnimationFrame(raf); window.removeEventListener('resize', size); document.removeEventListener('keydown', kd); document.removeEventListener('keyup', ku); if (lastD) send({ action: 'pfmove', d: 0 }); },
+    };
+  }
+
   // ---- Hot Potato: players stand in a ring; the holder taps someone to throw them the bomb; whoever holds it when it blows is out ----
   function renderBomb() {
     const g = S.mini, me = S.you.name, cars = g.cars, n = cars.length, mine = cars.find((c) => c.name === me), myId = mine ? mine.i : -1;
@@ -822,7 +950,7 @@
       const key = S.state + ':' + S.code + ':' + S.mini.index;
       if (key === liveKey) return;
       liveKey = key; stopLive(); stopAnim(); standKey = null;
-      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : S.mini.game === 'bomb' ? renderBomb() : S.mini.game === 'copy' ? renderCopy() : renderPlay();
+      return S.state === 'countdown' ? renderCountdown() : S.mini.game === 'rc' ? renderRc() : S.mini.game === 'pic' ? renderPic() : S.mini.game === 'bomb' ? renderBomb() : S.mini.game === 'copy' ? renderCopy() : S.mini.game === 'pf' ? renderPf() : renderPlay();
     }
     liveKey = null; stopLive();
     if (S && S.state === 'standings') {                 // animate once per round; ignore re-broadcasts (e.g. someone leaves)

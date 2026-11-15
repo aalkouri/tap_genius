@@ -67,6 +67,7 @@ function closeRoom(room) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
+  pf:    { id: 'pf', name: 'Pie Fight', icon: '🥧', how: 'Run around the edge, then throw pies at faces across the arena. Hit = +1, get hit = -1!', ms: 50000, min: 2 },
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
   copy:  { id: 'copy', name: 'Copy Cat', icon: '🎵', how: 'Watch the pattern, then tap it back. The fastest to finish each round scores the most. One mistake and you are out!', ms: 80000, min: 1 },
   pic:   { id: 'pic', name: 'Picture This', icon: '🎨', how: 'One player draws a secret word. Everyone else types guesses — fast guesses score more!', ms: 75000, min: 2 },
@@ -139,6 +140,7 @@ function view(room, p) {
       v.mini.pic = { drawer: room.pic.drawer.name, you: me, hint: picPattern(room.pic), len: room.pic.word.length };
       if (me) v.mini.pic.word = room.pic.word;
     }
+    if (g.id === 'pf') v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av, t: x.pf ? Math.round(x.pf.t) : 0 }));
     if (g.id === 'bomb' || g.id === 'copy') {
       v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av }));
       if (g.id === 'bomb') { v.mini.alive = (room.bomb ? [...room.bomb.alive] : room.players).map((x) => x.idx); v.mini.holder = room.bomb && room.bomb.holder ? room.bomb.holder.idx : -1; }
@@ -217,9 +219,10 @@ function startMini(room) {             // every mini game opens with the same 3-
     room.order[room.qIndex] = alt.length ? alt[Math.floor(Math.random() * alt.length)] : 'whack';
   }
   const gid = room.order[room.qIndex];
-  miniCleanup(room); room.bomb = null; room.copy = null;
+  miniCleanup(room); room.bomb = null; room.copy = null; room.pf = null;
   room.rc = gid === 'rc' ? { track: makeTrack() } : null;      // RC: same track for every lane
   room.pic = gid === 'pic' ? picStart(room) : null;            // Picture This: choose the drawer and the word
+  if (gid === 'pf') pfPlace(room);                              // Pie Fight: spread everyone around the edge
   broadcast(room);
   room.timer = setTimeout(() => playMini(room), COUNTDOWN_MS);
 }
@@ -239,6 +242,7 @@ function playMini(room) {
   else if (g.id === 'pic') picHints(room);
   else if (g.id === 'bomb') bombInit(room);
   else if (g.id === 'copy') copyInit(room);
+  else if (g.id === 'pf') pfInit(room);
   room.timer = setTimeout(() => endMini(room), g.ms);
 }
 // The order of mini games for a series: `n` rounds drawn from `ids`, every game once per lap (shuffled), never the same game twice in a row.
@@ -260,6 +264,63 @@ function miniCleanup(room) {          // stop any timers a mini game left runnin
   const b = room.bomb; if (b) { clearTimeout(b.fuseTimer); clearTimeout(b.warnTimer); clearTimeout(b.rebomb); }
   const c = room.copy; if (c) clearTimeout(c.timer);
 }
+
+// ---------- Pie Fight ----------
+// Players ride a loop around the edge of a square arena (t = distance along the loop, clockwise from the top-left corner).
+// Left = clockwise, right = counter-clockwise, so running off a corner carries you onto the next side. A throw pauses you for 1.5s;
+// the pie leaves after a short wind-up and flies straight across the arena (perpendicular to your edge). Hit a face: +1 for you, -1 for them.
+const PF = { P: 4000, S: 1000, SPEED: 520, PIE_SPEED: 1100, RELEASE_MS: 350, LOCK_MS: 1500, HIT_R: 60, STUN_MS: 1400, GRACE_MS: 700, TICK: 33 };
+function pfPoint(t) {
+  t = ((t % PF.P) + PF.P) % PF.P; const side = Math.floor(t / 1000), u = t - side * 1000;
+  return side === 0 ? [u, 0] : side === 1 ? [1000, u] : side === 2 ? [1000 - u, 1000] : [0, 1000 - u];
+}
+const pfNormal = (t) => [[0, 1], [-1, 0], [0, -1], [1, 0]][Math.floor((((t % PF.P) + PF.P) % PF.P) / 1000)];      // straight in from the current edge
+function pfPlace(room) {
+  room.pf = { pies: [], seq: 0, live: false };
+  const n = room.players.length;
+  room.players.forEach((p, i) => { p.pf = { t: (2500 + (i * PF.P) / n) % PF.P, dir: 0, lockUntil: 0, releaseAt: 0, stunUntil: 0, score: 0 }; });
+}
+function pfInit(room) {
+  room.pf.live = true; room.pfLast = Date.now();
+  room.players.forEach((p) => { p.pf.dir = 0; p.pf.lockUntil = 0; p.pf.releaseAt = 0; p.pf.stunUntil = 0; p.pf.score = 0; });
+  room.tick = setInterval(() => pfTick(room), PF.TICK);
+}
+const pfScores = (room) => Object.fromEntries(room.players.map((p) => [p.idx, p.pf ? p.pf.score : 0]));
+function pfTick(room) {
+  if (room.state !== 'play' || !room.pf) return;
+  const now = Date.now(), dt = Math.min(0.1, (now - room.pfLast) / 1000), pf = room.pf; room.pfLast = now;
+  const snap = [];
+  for (const p of room.players) {
+    const f = p.pf; if (!f) continue;
+    if (!p.away && f.dir && now >= f.lockUntil) f.t = (f.t + f.dir * PF.SPEED * dt + PF.P) % PF.P;       // no running while throwing
+    if (f.releaseAt && now >= f.releaseAt) {                                                              // the pie leaves the hand
+      f.releaseAt = 0;
+      const [ox, oy] = pfPoint(f.t), [nx, ny] = pfNormal(f.t), pie = { id: ++pf.seq, by: p, x: ox + nx * 25, y: oy + ny * 25, dx: nx, dy: ny };
+      pf.pies.push(pie); emit(room, { ev: 'pfpie', id: pie.id, i: p.idx, x: Math.round(pie.x), y: Math.round(pie.y), dx: nx, dy: ny, sp: PF.PIE_SPEED });
+    }
+    snap.push([p.idx, Math.round(f.t), Math.max(0, Math.ceil((f.lockUntil - now) / 50)), Math.max(0, Math.ceil((f.stunUntil - now) / 50)), f.dir]);
+  }
+  for (const pie of [...pf.pies]) {                                                                       // fly, hit a face, or land on the far wall
+    const ox = pie.x, oy = pie.y, step = PF.PIE_SPEED * dt; pie.x += pie.dx * step; pie.y += pie.dy * step;
+    let best = null, bestD = 1e9;
+    for (const q of room.players) {
+      if (q === pie.by || !q.pf || q.away) continue;                                                       // away players are not targets
+      const [hx, hy] = pfPoint(q.pf.t), vx = pie.x - ox, vy = pie.y - oy, L2 = vx * vx + vy * vy || 1;
+      const u = Math.max(0, Math.min(1, ((hx - ox) * vx + (hy - oy) * vy) / L2)), cx = ox + vx * u, cy = oy + vy * u;
+      if (Math.hypot(hx - cx, hy - cy) < PF.HIT_R) { const d = Math.hypot(hx - ox, hy - oy); if (d < bestD) { bestD = d; best = [q, hx, hy]; } }
+    }
+    if (best) {
+      const [q, hx, hy] = best; pf.pies.splice(pf.pies.indexOf(pie), 1);
+      pie.by.pf.score += 1; q.pf.score -= 1; q.pf.stunUntil = now + PF.STUN_MS;
+      emit(room, { ev: 'pfhit', id: pie.id, by: pie.by.idx, to: q.idx, x: Math.round(hx), y: Math.round(hy), sc: pfScores(room) });
+    } else if (pie.x < 0 || pie.x > PF.S || pie.y < 0 || pie.y > PF.S) {
+      pf.pies.splice(pf.pies.indexOf(pie), 1);
+      emit(room, { ev: 'pfland', id: pie.id, x: Math.round(Math.max(0, Math.min(PF.S, pie.x))), y: Math.round(Math.max(0, Math.min(PF.S, pie.y))) });
+    }
+  }
+  emit(room, { ev: 'pf', t: now - room.playStart, c: snap });
+}
+function pfAward(room) { room.players.forEach((p) => { if (p.pf) p.score += p.pf.score; }); room.pf.live = false; }
 
 // ---------- Hot Potato ----------
 // One bomb with a hidden fuse. The holder taps another player to throw it; whoever holds it when it blows is out.
@@ -490,6 +551,7 @@ function endMini(room) {
   if (room.pic) room.pic.live = false;
   if (room.bomb) bombAward(room);
   if (room.copy) copyAward(room);
+  if (room.pf && room.pf.live) pfAward(room);
   miniCleanup(room);
   room.players.forEach((p) => { p.gained = p.score - p.prev; });
   enterStandings(room);
@@ -507,6 +569,7 @@ function advance(room) {
 }
 // A roster change (someone left or went away): can the game carry on without them?
 function settle(room) {
+  if (room.state === 'play' && room.pf && room.pf.live && here(room).length < 2) return endMini(room);
   if (room.state === 'play' && room.pic && room.pic.live) {
     if (!room.players.includes(room.pic.drawer) || here(room).length < 2) return endMini(room);   // drawer gone / nobody left to guess
     picCheckDone(room);
@@ -537,6 +600,7 @@ function goAway(ws) {
 }
 // Bring a returning player up to date with things that are not part of the normal state message.
 function resync(room, p) {
+  if (room.state === 'play' && room.pf && room.pf.live) send(p.ws, { type: 'ev', ev: 'pfsync', sc: pfScores(room), pies: room.pf.pies.map((x) => ({ id: x.id, x: Math.round(x.x), y: Math.round(x.y), dx: x.dx, dy: x.dy, sp: PF.PIE_SPEED })) });
   if (room.state === 'play' && room.bomb) send(p.ws, { type: 'ev', ev: 'bstate', holder: room.bomb.holder ? room.bomb.holder.idx : -1, alive: bombIdx(room), n: room.bomb.out.length });
   if (room.state === 'play' && room.copy && room.copy.phase !== 'idle') { const c = room.copy; send(p.ws, { type: 'ev', ev: 'ccsync', r: c.round, phase: c.phase, seq: c.seq.slice(0, c.len), i: p.cc ? p.cc.i : 0, done: !!(p.cc && p.cc.done), alive: copyAliveIdx(room), scores: copyScores(room), finished: room.players.filter((q) => q.cc && q.cc.done).map((q) => ({ i: q.idx, rank: q.cc.rank, pts: q.cc.pts })) }); }
   if (room.state === 'play' && room.pic && room.pic.live) send(p.ws, { type: 'ev', ev: 'picsync', strokes: room.pic.strokes || [] });
@@ -676,6 +740,15 @@ const ACTIONS = {
       emit(room, { ev: 'picguess', name: p.name, text: raw.slice(0, 24) });
       if (w.length >= 4 && g.length >= 3 && lev1(g, w)) send(ws, { type: 'ev', ev: 'picclose' });
     }
+  },
+  pfmove(ws, m) {   // Pie Fight: left (+1, clockwise) / right (-1) held, 0 = released
+    const p = ws.player; if (!ws.room || ws.room.state !== 'play' || !ws.room.pf || !p.pf) return; p.pf.dir = m.d > 0 ? 1 : m.d < 0 ? -1 : 0;
+  },
+  pfthrow(ws) {     // Pie Fight: wind up and throw; you are frozen for 1.5s and cannot throw again until it ends
+    const room = ws.room, p = ws.player; if (!room || room.state !== 'play' || !room.pf || !room.pf.live || !p.pf || p.away) return;
+    const now = Date.now(); if (now < p.pf.lockUntil || now - room.playStart < PF.GRACE_MS) return;
+    p.pf.lockUntil = now + PF.LOCK_MS; p.pf.releaseAt = now + PF.RELEASE_MS;
+    emit(room, { ev: 'pfwind', i: p.idx });
   },
   bpass(ws, m) {    // Hot Potato: the holder throws the bomb to another player
     const room = ws.room, p = ws.player, b = room && room.bomb; if (!b || room.state !== 'play' || b.holder !== p) return;
