@@ -325,6 +325,9 @@
       for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) { f.fillStyle = (r + q) % 2 ? '#f7e6bd' : '#fff3d1'; f.fillRect(q * ts, r * ts, ts + 1, ts + 1); }
       f.strokeStyle = 'rgba(120,70,20,.35)'; f.lineWidth = 2; f.setLineDash([6, 8]); f.strokeRect(I, I, W - 2 * I, W - 2 * I);   // the track everyone runs on
       f.setLineDash([]); f.lineWidth = 6; f.strokeStyle = '#8a5a2b'; f.strokeRect(1.5, 1.5, W - 3, W - 3);
+      cars.forEach((c) => { if (c.lo === undefined) return;                                                        // two players: mark each one's own side
+        const [x0, y0] = PT(c.lo), [x1, y1] = PT(c.hi === 1000 ? 999.9 : c.hi - 0.1); f.strokeStyle = c.i === myId ? 'rgba(255,190,40,.9)' : 'rgba(120,70,20,.55)'; f.lineWidth = 5; f.lineCap = 'round';
+        f.beginPath(); f.moveTo(I + x0 * SC, I + y0 * SC); f.lineTo(I + x1 * SC, I + y1 * SC); f.stroke(); });
       f.font = `900 ${W * 0.11}px system-ui,sans-serif`; f.fillStyle = 'rgba(160,110,50,.18)'; f.textAlign = 'center'; f.fillText('PIE FIGHT', W / 2, W / 2 + W * 0.04);
     };
     size(); window.addEventListener('resize', size);
@@ -392,8 +395,9 @@
     const frame = (now) => {
       raf = requestAnimationFrame(frame);
       state.forEach((c) => {                                              // smooth the 30 Hz snapshots (and run around corners, never jumping)
-        const age = Math.min(100, now - c.at) / 1000, est = (c.t + (c.lock > 0 ? 0 : c.dir * 520 * age) + 4000) % 4000;
-        c.dt = (c.dt + (((est - c.dt + 6000) % 4000) - 2000) * 0.5 + 4000) % 4000;
+        const age = Math.min(100, now - c.at) / 1000, raw = c.t + (c.lock > 0 ? 0 : c.dir * 520 * age);
+        if (c.lo !== undefined) c.dt += (Math.max(c.lo, Math.min(c.hi, raw)) - c.dt) * 0.5;                       // confined to one side: no wrapping
+        else { const est = (raw + 4000) % 4000; c.dt = (c.dt + (((est - c.dt + 6000) % 4000) - 2000) * 0.5 + 4000) % 4000; }
       });
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(floor, 0, 0, W, W);
       splats.forEach((s) => { const [sx, sy] = px(s.x, s.y); splat(sx, sy, s.r * W / 360, s.seed); });

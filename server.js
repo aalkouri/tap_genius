@@ -140,7 +140,10 @@ function view(room, p) {
       v.mini.pic = { drawer: room.pic.drawer.name, you: me, hint: picPattern(room.pic), len: room.pic.word.length };
       if (me) v.mini.pic.word = room.pic.word;
     }
-    if (g.id === 'pf') v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av, t: x.pf ? Math.round(x.pf.t) : 0 }));
+    if (g.id === 'pf') {
+      v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av, t: x.pf ? Math.round(x.pf.t) : 0, lo: x.pf ? x.pf.lo : undefined, hi: x.pf ? x.pf.hi : undefined }));
+      if (room.players.length === 2) v.mini.how = g.how.replace('Run around the edge, then throw', 'You each stay on your own side. Run along it, then throw');
+    }
     if (g.id === 'bomb' || g.id === 'copy') {
       v.mini.cars = room.players.map((x) => ({ i: x.idx, name: x.name, av: x.av }));
       if (g.id === 'bomb') { v.mini.alive = (room.bomb ? [...room.bomb.alive] : room.players).map((x) => x.idx); v.mini.holder = room.bomb && room.bomb.holder ? room.bomb.holder.idx : -1; }
@@ -278,7 +281,10 @@ const pfNormal = (t) => [[0, 1], [-1, 0], [0, -1], [1, 0]][Math.floor((((t % PF.
 function pfPlace(room) {
   room.pf = { pies: [], seq: 0, live: false };
   const n = room.players.length;
-  room.players.forEach((p, i) => { p.pf = { t: (2500 + (i * PF.P) / n) % PF.P, dir: 0, lockUntil: 0, releaseAt: 0, stunUntil: 0, score: 0 }; });
+  room.players.forEach((p, i) => {
+    p.pf = { t: (2500 + (i * PF.P) / n) % PF.P, dir: 0, lockUntil: 0, releaseAt: 0, stunUntil: 0, score: 0 };       // evenly spaced round the loop
+    if (n === 2) Object.assign(p.pf, i === 0 ? { lo: 2000, hi: 3000, flip: 1, t: 2500 } : { lo: 0, hi: 1000, flip: -1, t: 500 });    // two players: opposite sides, and they never leave them
+  });
 }
 function pfInit(room) {
   room.pf.live = true; room.pfLast = Date.now();
@@ -292,13 +298,16 @@ function pfTick(room) {
   const snap = [];
   for (const p of room.players) {
     const f = p.pf; if (!f) continue;
-    if (!p.away && f.dir && now >= f.lockUntil) f.t = (f.t + f.dir * PF.SPEED * dt + PF.P) % PF.P;       // no running while throwing
+    if (!p.away && f.dir && now >= f.lockUntil) {                                                          // no running while throwing
+      const step = f.dir * (f.flip || 1) * PF.SPEED * dt;
+      f.t = f.lo === undefined ? (f.t + step + PF.P) % PF.P : Math.max(f.lo, Math.min(f.hi, f.t + step));    // confined: stop at the corner
+    }
     if (f.releaseAt && now >= f.releaseAt) {                                                              // the pie leaves the hand
       f.releaseAt = 0;
       const [ox, oy] = pfPoint(f.t), [nx, ny] = pfNormal(f.t), pie = { id: ++pf.seq, by: p, x: ox + nx * 25, y: oy + ny * 25, dx: nx, dy: ny };
       pf.pies.push(pie); emit(room, { ev: 'pfpie', id: pie.id, i: p.idx, x: Math.round(pie.x), y: Math.round(pie.y), dx: nx, dy: ny, sp: PF.PIE_SPEED });
     }
-    snap.push([p.idx, Math.round(f.t), Math.max(0, Math.ceil((f.lockUntil - now) / 50)), Math.max(0, Math.ceil((f.stunUntil - now) / 50)), f.dir]);
+    snap.push([p.idx, Math.round(f.t), Math.max(0, Math.ceil((f.lockUntil - now) / 50)), Math.max(0, Math.ceil((f.stunUntil - now) / 50)), f.dir * (f.flip || 1)]);       // last item: the way t is actually changing
   }
   for (const pie of [...pf.pies]) {                                                                       // fly, hit a face, or land on the far wall
     const ox = pie.x, oy = pie.y, step = PF.PIE_SPEED * dt; pie.x += pie.dx * step; pie.y += pie.dy * step;
