@@ -260,8 +260,8 @@
           <g class="leg l"><line x1="25" y1="36" x2="25" y2="57"/><ellipse cx="26.5" cy="60" rx="6" ry="3.5"/></g>
           <g class="leg r"><line x1="35" y1="36" x2="35" y2="57"/><ellipse cx="36.5" cy="60" rx="6" ry="3.5"/></g>
           <rect class="torso" x="17" y="4" width="26" height="36" rx="10"/>
-          <g class="arm l"><line x1="18" y1="11" x2="18" y2="36"/><circle cx="18" cy="38" r="4.8"/></g>
-          <g class="arm r"><line x1="42" y1="11" x2="42" y2="36"/><circle cx="42" cy="38" r="4.8"/></g>
+          <g class="arm l"><line x1="18" y1="11" x2="18" y2="36"/><circle cx="18" cy="38" r="4.8"/><g class="bent"><line x1="18" y1="11" x2="14" y2="28"/><g class="fore"><line x1="14" y1="28" x2="29" y2="21"/><circle cx="29" cy="21" r="4.8"/></g></g></g>
+          <g class="arm r"><line x1="42" y1="11" x2="42" y2="36"/><circle cx="42" cy="38" r="4.8"/><g class="bent"><line x1="42" y1="11" x2="46" y2="28"/><g class="fore"><line x1="46" y1="28" x2="31" y2="21"/><circle cx="31" cy="21" r="4.8"/></g></g></g>
         </svg></div></div>`;
     app.innerHTML = `${brand}<h2 class="st-title">🏆 Winners</h2>
       <div class="stage" id="stage">

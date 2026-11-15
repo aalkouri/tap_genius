@@ -174,9 +174,12 @@ button.small { padding:9px; font-size:.85rem; }
 @keyframes waveR { from { transform:rotate(-128deg); } to { transform:rotate(-152deg); } }
 .cheer .toon-in { animation:jump .4s ease-out infinite alternate; }
 @keyframes jump { from { transform:translateY(0); } to { transform:translateY(-20px); } }
-.clap .arm.l { animation:clapL .28s ease-in-out infinite alternate; } .clap .arm.r { animation:clapR .28s ease-in-out infinite alternate; }
-@keyframes clapL { from { transform:rotate(26deg); } to { transform:rotate(-26deg); } }   /* hands apart -> palms meet at the centre line (x=30), never crossing */
-@keyframes clapR { from { transform:rotate(-26deg); } to { transform:rotate(26deg); } }
+.bent { display:none; }
+.clap .arm > line, .clap .arm > circle { display:none; } .clap .bent { display:inline; }
+.clap .arm.l, .clap .arm.r { animation:none; transform:none; }        /* clapping: elbows bent, forearms swing from open to hands meeting at chest height */
+.clap .arm.l .fore { transform-origin:14px 28px; animation:clapL .28s ease-in-out infinite alternate; } .clap .arm.r .fore { transform-origin:46px 28px; animation:clapR .28s ease-in-out infinite alternate; }
+@keyframes clapL { from { transform:rotate(-40deg); } to { transform:rotate(0deg); } }
+@keyframes clapR { from { transform:rotate(40deg); } to { transform:rotate(0deg); } }
 .confetti { position:absolute; top:-14px; width:8px; height:13px; border-radius:2px; z-index:3; animation:fall linear 2 both; pointer-events:none; }
 @keyframes fall { 0% { top:-14px; opacity:1; } 100% { top:105%; opacity:.9; margin-left:24px; } }
 
