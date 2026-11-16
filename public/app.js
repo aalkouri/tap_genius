@@ -900,9 +900,6 @@
     const ku = (e) => { if (['ArrowRight', 'KeyD', 'KeyL'].includes(e.code)) setGo(false); };
     document.addEventListener('keydown', kd); document.addEventListener('keyup', ku);
 
-    // ---- bridge / lift openness (0 flat .. 1 fully raised); fully raised = blocking, exactly as the server decides
-    const openness = (o, t) => { const c = (((t + o.ph) % o.per) + o.per) % o.per; if (c < o.up) return 1; if (c >= o.per - 500) return (c - (o.per - 500)) / 500; if (c < o.up + 400) return 1 - (c - o.up) / 400; return 0; };
-
     const rcBall = (o, t) => { const p = (((t + o.ph) % o.per) + o.per) % o.per / o.per; return o.hm * 4 * p * (1 - p); };       // same bounce as the server
     const drawCar = (c, sx, gy, ppu, t, isMe) => {
       const L = 44 * ppu, Hh = 15 * ppu, wr = 7.5 * ppu, y = gy - c.dy * ppu;
@@ -984,20 +981,6 @@
         } else if (o.k === 'oil') {                                                                                       // oil slick
           const cxo = sx + sw / 2; ctx.fillStyle = '#14121b'; ctx.beginPath(); ctx.ellipse(cxo, gy + ppu, sw / 2, 4.5 * ppu, 0, 0, 7); ctx.fill();
           ctx.fillStyle = 'rgba(120,200,255,.4)'; ctx.beginPath(); ctx.ellipse(cxo - sw * 0.15, gy, sw * 0.18, 1.6 * ppu, 0, 0, 7); ctx.fill(); ctx.fillStyle = 'rgba(255,140,220,.35)'; ctx.beginPath(); ctx.ellipse(cxo + sw * 0.18, gy + 2 * ppu, sw * 0.14, 1.4 * ppu, 0, 0, 7); ctx.fill();
-        } else {
-          const op = openness(o, t), up = op >= 0.999;
-          ctx.fillStyle = '#2b2b2b'; ctx.fillRect(sx - 3 * ppu, gy - 6 * ppu, sw + 6 * ppu, 6 * ppu);                  // the frame it sits in
-          if (o.k === 'bridge') {                                                                                         // drawbridge: hinged at the near end
-            ctx.save(); ctx.translate(sx, gy - 6 * ppu); ctx.rotate(-op * 1.32);
-            ctx.fillStyle = up ? '#b3261e' : '#c8913f'; ctx.fillRect(0, -6 * ppu, sw, 6 * ppu);
-            ctx.fillStyle = 'rgba(0,0,0,.28)'; for (let q = 1; q < 7; q++) ctx.fillRect(q * sw / 7, -6 * ppu, Math.max(1, ppu * .8), 6 * ppu);
-            ctx.restore();
-          } else {                                                                                                         // lift: a block that rises
-            const lh = op * 62 * ppu + 5 * ppu; ctx.fillStyle = up ? '#b3261e' : '#d9a21b'; ctx.fillRect(sx + 4 * ppu, gy - 6 * ppu - lh, sw - 8 * ppu, lh);
-            ctx.fillStyle = 'rgba(0,0,0,.55)'; for (let q = 0; q < 8; q++) { ctx.beginPath(); ctx.moveTo(sx + 4 * ppu + q * (sw - 8 * ppu) / 8, gy - 6 * ppu); ctx.lineTo(sx + 4 * ppu + (q + 0.5) * (sw - 8 * ppu) / 8, gy - 6 * ppu); ctx.lineTo(sx + 4 * ppu + (q + 1) * (sw - 8 * ppu) / 8, gy - 6 * ppu - lh); ctx.lineTo(sx + 4 * ppu + (q + .5) * (sw - 8 * ppu) / 8, gy - 6 * ppu - lh); ctx.fill(); }
-          }
-          ctx.fillStyle = op > 0 && !up ? '#ffb703' : up ? '#ff3b30' : '#2ecc71'; ctx.beginPath(); ctx.arc(sx + sw * 0.5, gy - 74 * ppu, 4 * ppu, 0, 7); ctx.fill();   // signal lamp: green / amber / red
-          ctx.fillStyle = '#444'; ctx.fillRect(sx + sw * 0.5 - ppu, gy - 70 * ppu, 2 * ppu, 64 * ppu);
         }
       }
       { let tgt = 0; const rp = rc.track.find((o) => o.k === 'ramp' && c.dx > o.x && c.dx < o.x + o.w);   // car pitch: slope on a ramp, flight path in the air
@@ -1033,7 +1016,7 @@
       if (banner && now < banner.until) {                           // "ENGINE OFF" / finish banner over my lane
         ctx.textAlign = 'center'; ctx.font = '900 34px system-ui,sans-serif'; ctx.lineWidth = 5; ctx.strokeStyle = '#0a2a5e'; ctx.strokeText(banner.text, W / 2, H * 0.36); ctx.fillStyle = banner.color; ctx.fillText(banner.text, W / 2, H * 0.36); ctx.textAlign = 'left';
       }
-      // HUD: my place, engine / bridge hint, timer bar, engine sound
+      // HUD: my place, engine hint, timer bar, engine sound
       const order = [...all].sort((a, b) => (b.rank ? 1e6 - b.rank : b.dx) - (a.rank ? 1e6 - a.rank : a.dx));
       const place = order.indexOf(meC) + 1;
       document.getElementById('rcpos').textContent = meC ? `🏁 ${ordinal(place)} of ${all.length}` : '';

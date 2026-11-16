@@ -73,7 +73,7 @@ const MINI = {
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
   copy:  { id: 'copy', name: 'Copy Cat', icon: '🎵', how: 'Watch the pattern, then tap it back. The fastest to finish each round scores the most. One mistake and you are out!', ms: 80000, min: 1 },
   pic:   { id: 'pic', name: 'Picture This', icon: '🎨', how: 'One player draws a secret word. Everyone else types guesses — fast guesses score more!', ms: 75000, min: 2 },
-  rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs, ride the ramps, dodge the ball, spikes and oil. Wait for the bridges!', ms: 120000 },
+  rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs, ride the ramps, dodge the ball, spikes and oil.', ms: 120000 },
 };
 const WORDS = JSON.parse(fs.readFileSync(path.join(__dirname, 'words.json'), 'utf8'));   // things that are fun to draw
 const COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
@@ -588,9 +588,8 @@ const lev1 = (a, b) => {                                                        
 // Every player drives an identical lane. The server runs all the physics (30 Hz) so the race is fair:
 //  - log (small) and rock (big) are SOLID blocks: driving into one stops you dead at its face (log: you are slowed, rock: engine cuts out for
 //    a couple of seconds). Jump over, or jump ONTO the top and drive along it / off the end.
-//  - bridge / lift: rises and falls on a timer; driving into it while it is up cuts the engine and bumps you back
 const RC = { LEN: 7200, CARH: 46, SPIKE_MS: 3000, OIL_MS: 1000, MAXV: 360, ACC: 520, DECEL: 240, BRAKE: 700, G: 1500, JV: 520, CAR: 22, TICK: 33,
-  STALL_MS: 2600, BRIDGE_STALL_MS: 2200, SLOW_MS: 900, AFTER_FIRST_MS: 15000, POINTS: [10, 7, 5, 4, 3, 2] };
+  STALL_MS: 2600, SLOW_MS: 900, AFTER_FIRST_MS: 15000, POINTS: [10, 7, 5, 4, 3, 2] };
 function mulberry(seed) { return () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 function makeTrack() {
   if (process.env.RC_TRACK_JSON) return JSON.parse(process.env.RC_TRACK_JSON);   // tests only: a fixed track
@@ -598,19 +597,17 @@ function makeTrack() {
   let x = 520;
   while (x < RC.LEN - 450) {
     const roll = r(); let o, gap = 110 + Math.floor(r() * 170);
-    if (roll < 0.20) o = { k: 'log', x, w: 26 + Math.floor(r() * 14), h: 24 };
-    else if (roll < 0.30) o = { k: 'rock', x, w: 50 + Math.floor(r() * 30), h: 56 };
-    else if (roll < 0.42) { o = { k: 'ramp', x, w: 110 + Math.floor(r() * 50), h: 46 + Math.floor(r() * 24) }; gap = 190 + Math.floor(r() * 230); }   // drive up it and fly off the end
-    else if (roll < 0.53) o = { k: 'ball', x, w: 36, hm: 85 + Math.floor(r() * 40), per: 1500 + Math.floor(r() * 900), ph: Math.floor(r() * 3000) };   // bouncing ball: jump over it or drive under it
-    else if (roll < 0.64) o = { k: 'spike', x, w: 60 + Math.floor(r() * 40), h: 12 };                                                                   // spike trap: slowed for 3 s
-    else if (roll < 0.75) o = { k: 'oil', x, w: 80 + Math.floor(r() * 50), h: 2 };                                                                       // oil slick: cannot slow down for 1 s
-    else { o = { k: roll < 0.88 ? 'bridge' : 'lift', x, w: 120, per: 4200 + Math.floor(r() * 1800), ph: Math.floor(r() * 6000) }; o.up = Math.round(o.per * (0.42 + r() * 0.12)); }
+    if (roll < 0.24) o = { k: 'log', x, w: 26 + Math.floor(r() * 14), h: 24 };
+    else if (roll < 0.38) o = { k: 'rock', x, w: 50 + Math.floor(r() * 30), h: 56 };
+    else if (roll < 0.52) { o = { k: 'ramp', x, w: 110 + Math.floor(r() * 50), h: 46 + Math.floor(r() * 24) }; gap = 190 + Math.floor(r() * 230); }   // drive up it and fly off the end
+    else if (roll < 0.67) o = { k: 'ball', x, w: 36, hm: 85 + Math.floor(r() * 40), per: 1500 + Math.floor(r() * 900), ph: Math.floor(r() * 3000) };   // bouncing ball: jump over it or drive under it
+    else if (roll < 0.83) o = { k: 'spike', x, w: 60 + Math.floor(r() * 40), h: 12 };                                                                   // spike trap: slowed for 3 s
+    else o = { k: 'oil', x, w: 80 + Math.floor(r() * 50), h: 2 };                                                                       // oil slick: cannot slow down for 1 s
     track.push(o); x += o.w + gap;
   }
   track.forEach((o, i) => { o.i = i; });
   return track;
 }
-const rcUp = (o, t) => (((t + o.ph) % o.per) + o.per) % o.per < o.up;      // bridge / lift is raised (blocking)
 const rcBall = (o, t) => { const p = (((t + o.ph) % o.per) + o.per) % o.per / o.per; return o.hm * 4 * p * (1 - p); };   // height of the ball's underside (a parabolic bounce)
 function rcInit(room) {
   const tr = room.rc.track;
@@ -689,10 +686,6 @@ function rcTick(room) {
             else { c.oilUntil = now + RC.OIL_MS; c.oilV = c.v; emit(room, { ev: 'rchit', i: p.idx, k: 'oil' }); }
           }
           continue;
-        }
-        if (o.k !== 'bridge' && o.k !== 'lift') continue;
-        if (prevFront <= o.x && front > o.x && rcUp(o, t) && (o.k === 'bridge' || c.y < 68)) {       // drove into a raised bridge / lift (a big ramp jump flies over a lift)
-          c.x = o.x - RC.CAR - 4; crash(c); c.stallUntil = now + RC.BRIDGE_STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' });
         }
       }
       if (c.x >= RC.LEN) {
