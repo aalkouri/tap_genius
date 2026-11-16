@@ -1273,7 +1273,8 @@
       ? `<div class="chips modes">${[['trivia', '🧠 Trivia'], ['mini', '🎮 Mini Games']].map(([m, l]) => `<button class="chip ${S.mode === m ? 'on' : ''}" data-setmode="${m}">${l}</button>`).join('')}</div>`
       : `<div class="muted">${S.mode === 'mini' ? '🎮 Mini Games' : '🧠 Trivia'}</div>`}
       ${S.isHost
-        ? `<div class="chips modes"><button class="chip ${S.isPublic ? 'on' : ''}" id="vis">${S.isPublic ? '🌐 Public — listed for everyone' : '🔒 Private — code only'}</button></div>
+        ? `<div class="chips modes">${[[false, '🔒 Private'], [true, '🌐 Public']].map(([v, l]) => `<button class="chip ${!!S.isPublic === v ? 'on' : ''}" data-vis="${v}">${l}</button>`).join('')}</div>
+           <div class="muted small">${S.isPublic ? 'Anyone can find and join this game from the list.' : 'Hidden from the list. Players need your room code.'}</div>
            ${S.isPublic ? '' : `<div class="codebox"><span class="muted">Room code</span> <input id="roomcode" value="${esc(S.code)}" maxlength="8" autocapitalize="characters" autocomplete="off"><button class="chip small" id="savecode">Change</button></div>`}`
         : `<div class="muted">${S.isPublic ? '🌐 Public' : `🔒 Private · Code <b>${esc(S.code)}</b>`}</div>`}</div>`;
     if (S.state === 'lobby' && S.mode === 'mini') {
@@ -1341,7 +1342,7 @@
 
     document.querySelectorAll('.choice').forEach((b) => (b.onclick = () => send({ action: 'answer', choice: +b.dataset.i })));
     const on = (id, a) => { const el = document.getElementById(id); if (el) el.onclick = () => send({ action: a }); };
-    const vis = document.getElementById('vis'); if (vis) vis.onclick = () => send({ action: 'visibility', public: !S.isPublic });
+    document.querySelectorAll('[data-vis]').forEach((b) => (b.onclick = () => { const want = b.dataset.vis === 'true'; if (want !== !!S.isPublic) send({ action: 'visibility', public: want }); }));
     const sc = document.getElementById('savecode'), rcI = document.getElementById('roomcode');
     if (sc) { const saveCode = () => { if (rcI.value.trim().toUpperCase() !== S.code) send({ action: 'setcode', code: rcI.value }); }; sc.onclick = saveCode; rcI.onkeydown = (e) => { if (e.key === 'Enter') saveCode(); }; }
     on('start', 'start'); on('next', 'next'); on('again', 'again'); on('leave', 'leave');
