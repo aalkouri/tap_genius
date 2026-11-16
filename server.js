@@ -73,7 +73,7 @@ const MINI = {
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
   copy:  { id: 'copy', name: 'Copy Cat', icon: '🎵', how: 'Watch the pattern, then tap it back. The fastest to finish each round scores the most. One mistake and you are out!', ms: 80000, min: 1 },
   pic:   { id: 'pic', name: 'Picture This', icon: '🎨', how: 'One player draws a secret word. Everyone else types guesses — fast guesses score more!', ms: 75000, min: 2 },
-  rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs. Wait for the bridges!', ms: 70000 },
+  rc:    { id: 'rc', name: 'RC Mayhem', icon: '🏎️', how: 'Hold GO to drive. Tap JUMP over logs, ride the ramps, dodge the ball, spikes and oil. Wait for the bridges!', ms: 120000 },
 };
 const WORDS = JSON.parse(fs.readFileSync(path.join(__dirname, 'words.json'), 'utf8'));   // things that are fun to draw
 const COUNTDOWN_MS = 4000, CELLS = 9;   // 3-2-1-GO takes 4s; whack-a-mole is a 3x3 grid
@@ -589,7 +589,7 @@ const lev1 = (a, b) => {                                                        
 //  - log (small) and rock (big) are SOLID blocks: driving into one stops you dead at its face (log: you are slowed, rock: engine cuts out for
 //    a couple of seconds). Jump over, or jump ONTO the top and drive along it / off the end.
 //  - bridge / lift: rises and falls on a timer; driving into it while it is up cuts the engine and bumps you back
-const RC = { LEN: 3600, MAXV: 360, ACC: 520, DECEL: 240, BRAKE: 700, G: 1500, JV: 520, CAR: 22, TICK: 33,
+const RC = { LEN: 7200, CARH: 46, SPIKE_MS: 3000, OIL_MS: 1000, MAXV: 360, ACC: 520, DECEL: 240, BRAKE: 700, G: 1500, JV: 520, CAR: 22, TICK: 33,
   STALL_MS: 2600, BRIDGE_STALL_MS: 2200, SLOW_MS: 900, AFTER_FIRST_MS: 15000, POINTS: [10, 7, 5, 4, 3, 2] };
 function mulberry(seed) { return () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 function makeTrack() {
@@ -597,25 +597,34 @@ function makeTrack() {
   const r = mulberry(Math.floor(Math.random() * 1e9)), track = [];
   let x = 520;
   while (x < RC.LEN - 450) {
-    const roll = r(); let o;
-    if (roll < 0.36) o = { k: 'log', x, w: 26 + Math.floor(r() * 14), h: 24 };
-    else if (roll < 0.52) o = { k: 'rock', x, w: 50 + Math.floor(r() * 30), h: 56 };
-    else { o = { k: roll < 0.77 ? 'bridge' : 'lift', x, w: 120, per: 4200 + Math.floor(r() * 1800), ph: Math.floor(r() * 6000) }; o.up = Math.round(o.per * (0.42 + r() * 0.12)); }
-    track.push(o); x += o.w + 110 + Math.floor(r() * 170);
+    const roll = r(); let o, gap = 110 + Math.floor(r() * 170);
+    if (roll < 0.20) o = { k: 'log', x, w: 26 + Math.floor(r() * 14), h: 24 };
+    else if (roll < 0.30) o = { k: 'rock', x, w: 50 + Math.floor(r() * 30), h: 56 };
+    else if (roll < 0.42) { o = { k: 'ramp', x, w: 110 + Math.floor(r() * 50), h: 46 + Math.floor(r() * 24) }; gap = 190 + Math.floor(r() * 230); }   // drive up it and fly off the end
+    else if (roll < 0.53) o = { k: 'ball', x, w: 36, hm: 85 + Math.floor(r() * 40), per: 1500 + Math.floor(r() * 900), ph: Math.floor(r() * 3000) };   // bouncing ball: jump over it or drive under it
+    else if (roll < 0.64) o = { k: 'spike', x, w: 60 + Math.floor(r() * 40), h: 12 };                                                                   // spike trap: slowed for 3 s
+    else if (roll < 0.75) o = { k: 'oil', x, w: 80 + Math.floor(r() * 50), h: 2 };                                                                       // oil slick: cannot slow down for 1 s
+    else { o = { k: roll < 0.88 ? 'bridge' : 'lift', x, w: 120, per: 4200 + Math.floor(r() * 1800), ph: Math.floor(r() * 6000) }; o.up = Math.round(o.per * (0.42 + r() * 0.12)); }
+    track.push(o); x += o.w + gap;
   }
   track.forEach((o, i) => { o.i = i; });
   return track;
 }
 const rcUp = (o, t) => (((t + o.ph) % o.per) + o.per) % o.per < o.up;      // bridge / lift is raised (blocking)
+const rcBall = (o, t) => { const p = (((t + o.ph) % o.per) + o.per) % o.per / o.per; return o.hm * 4 * p * (1 - p); };   // height of the ball's underside (a parabolic bounce)
 function rcInit(room) {
-  room.rc.solid = room.rc.track.filter((o) => o.k === 'log' || o.k === 'rock'); room.rc.live = true; room.rc.finished = 0; room.rcLast = Date.now(); room.rcAllDone = false;
-  room.players.forEach((p) => { p.rc = { x: 0, y: 0, vy: 0, v: 0, go: false, jumpAt: -1e9, stallUntil: 0, slowUntil: 0, hit: new Set(), done: false, finT: 0, rank: 0 }; });
+  const tr = room.rc.track;
+  room.rc.solid = tr.filter((o) => o.k === 'log' || o.k === 'rock'); room.rc.ramps = tr.filter((o) => o.k === 'ramp'); room.rc.balls = tr.filter((o) => o.k === 'ball');
+  room.rc.flat = tr.filter((o) => o.k === 'spike' || o.k === 'oil');
+  room.rc.live = true; room.rc.finished = 0; room.rcLast = Date.now(); room.rcAllDone = false;
+  room.players.forEach((p) => { p.rc = { x: 0, y: 0, vy: 0, gvy: 0, grounded: true, v: 0, go: false, jumpAt: -1e9, stallUntil: 0, slowUntil: 0, oilUntil: 0, oilV: 0, ballCool: 0, hit: new Set(), done: false, finT: 0, rank: 0 }; });
   room.tick = setInterval(() => rcTick(room), RC.TICK);
 }
 function rcTick(room) {
   if (room.state !== 'play' || !room.rc) return;
   const now = Date.now(), dt = Math.min(0.1, (now - room.rcLast) / 1000), t = now - room.playStart, g = MINI.rc; room.rcLast = now;
-  const cars = [];
+  const cars = [], R = room.rc, solid = R.solid;
+  const crash = (c) => { c.v = 0; c.oilUntil = 0; };                       // any hard impact cancels the oil slick
   for (const p of room.players) {
     const c = p.rc; if (!c) continue;
     const prevFront = c.x + RC.CAR, engine = now >= c.stallUntil;
@@ -626,38 +635,64 @@ function rcTick(room) {
       if (c.go) c.v = c.v > maxv ? Math.max(maxv, c.v - 900 * dt) : Math.min(maxv, c.v + RC.ACC * dt);
       else c.v = Math.max(0, c.v - RC.DECEL * dt);
     }
+    if (now < c.oilUntil) c.v = Math.max(c.v, c.oilV);                      // oil slick: no braking, no slowing down, whatever happens
     const prevX = c.x; c.x += c.v * dt;
-    const solid = room.rc.solid;
-    if (!c.done) for (const o of solid) {                                   // 1. side impacts: the car's body is below the top of the block
-      if (o.x > c.x + RC.CAR + 40) break;
-      if (o.x + o.w < c.x - RC.CAR - 40) continue;
-      if (c.x + RC.CAR > o.x && c.x - RC.CAR < o.x + o.w && c.y < o.h - 3) {
-        c.x = (prevX + RC.CAR <= o.x + 2 || c.x < o.x + o.w / 2) ? o.x - RC.CAR : o.x + o.w + RC.CAR;      // stopped at the face (never inside)
-        c.v = 0;
-        if (!c.hit.has(o.i)) {
-          c.hit.add(o.i);
-          if (o.k === 'log') { c.slowUntil = now + RC.SLOW_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'small' }); }
-          else { c.stallUntil = now + RC.STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' }); }
+    if (!c.done) {
+      for (const o of solid) {                                              // 1. side impacts on logs / rocks: the body is below the top of the block
+        if (o.x > c.x + RC.CAR + 40) break;
+        if (o.x + o.w < c.x - RC.CAR - 40) continue;
+        if (c.x + RC.CAR > o.x && c.x - RC.CAR < o.x + o.w && c.y < o.h - 3) {
+          c.x = (prevX + RC.CAR <= o.x + 2 || c.x < o.x + o.w / 2) ? o.x - RC.CAR : o.x + o.w + RC.CAR;      // stopped at the face (never inside)
+          crash(c);
+          if (!c.hit.has(o.i)) {
+            c.hit.add(o.i);
+            if (o.k === 'log') { c.slowUntil = Math.max(c.slowUntil, now + RC.SLOW_MS); emit(room, { ev: 'rchit', i: p.idx, k: 'small' }); }
+            else { c.stallUntil = now + RC.STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' }); }
+          }
+        }
+      }
+      for (const o of R.balls) {                                            // 2. the bouncing ball: a moving box
+        if (o.x > c.x + RC.CAR + 40) break;
+        if (Math.abs(c.x - (o.x + o.w / 2)) < RC.CAR + o.w / 2) {
+          const yb = rcBall(o, t);
+          if (c.y < yb + o.w && c.y + RC.CARH > yb) {
+            c.x = (prevX <= o.x + o.w / 2) ? o.x - RC.CAR : o.x + o.w + RC.CAR; crash(c);
+            if (now > c.ballCool) { c.ballCool = now + 700; c.slowUntil = Math.max(c.slowUntil, now + RC.SLOW_MS); emit(room, { ev: 'rchit', i: p.idx, k: 'ball' }); }
+          }
         }
       }
     }
-    let gh = 0;                                                             // 2. what is under the car: the ground, or the top of a block
-    for (const o of solid) {
-      if (o.x > c.x + RC.CAR) break;
-      if (c.x + RC.CAR - 6 > o.x && c.x - RC.CAR + 6 < o.x + o.w && o.h > gh) gh = o.h;
+    // 3. what is under the car: ground, the top of a log / rock, or the sloping surface of a ramp (taken at the car's centre)
+    let G = 0;
+    for (const o of solid) { if (o.x > c.x + RC.CAR) break; if (c.x + RC.CAR - 6 > o.x && c.x - RC.CAR + 6 < o.x + o.w && o.h > G) G = o.h; }
+    for (const o of R.ramps) { if (o.x > c.x) break; if (c.x < o.x + o.w) G = Math.max(G, o.h * (c.x - o.x) / o.w); }
+    // 4. real vertical physics. On the ground the car follows the surface and remembers its upward speed (slope x speed); when the
+    //    surface ends (the lip of a ramp) it keeps that speed and flies; in the air only gravity acts until it lands on whatever is below.
+    if (c.grounded) {
+      if (G >= c.y - 0.01) { c.gvy = (G - c.y) / Math.max(dt, 0.001); c.y = G; }
+      else { c.vy = Math.max(0, c.gvy); c.gvy = 0; c.grounded = false; }
     }
-    if (c.y > gh + 0.001 || c.vy > 0) { c.vy -= RC.G * dt; c.y += c.vy * dt; if (c.y <= gh && c.vy <= 0) { c.y = gh; c.vy = 0; } }   // 3. fall / rise, landing on whatever is below
-    else { c.y = gh; c.vy = 0; }
-    c.air = c.y > gh + 0.001 || c.vy > 0;
-    if (!c.air && engine && !c.done && now - c.jumpAt < 130) { c.vy = RC.JV; c.y = gh + 0.01; c.air = true; c.jumpAt = -1e9; }   // jump (a press just before landing still counts)
+    if (!c.grounded) {
+      c.vy -= RC.G * dt; c.y += c.vy * dt;
+      if (c.y <= G && c.vy <= 0) { c.y = G; c.vy = 0; c.gvy = 0; c.grounded = true; }
+    }
+    if (c.grounded && engine && !c.done && now - c.jumpAt < 130) { c.vy = RC.JV + Math.max(0, c.gvy); c.y += 0.01; c.grounded = false; c.gvy = 0; c.jumpAt = -1e9; }   // jump (a press just before landing still counts); jumping off a ramp adds its speed
     if (!c.done) {
       const front = c.x + RC.CAR;
       for (const o of room.rc.track) {
         if (o.x > front + 40) break;
         if (o.x + o.w < c.x - RC.CAR) continue;
-        if (o.k === 'log' || o.k === 'rock') continue;
-        if (prevFront <= o.x && front > o.x && rcUp(o, t)) {         // drove into a raised bridge / lift
-          c.x = o.x - RC.CAR - 4; c.v = 0; c.stallUntil = now + RC.BRIDGE_STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' });
+        if (o.k === 'spike' || o.k === 'oil') {                             // flat floor hazards: only hit when the wheels are on the floor
+          if (c.grounded && c.y < 3 && c.x + RC.CAR - 4 > o.x && c.x - RC.CAR + 4 < o.x + o.w && !c.hit.has(o.i)) {
+            c.hit.add(o.i);
+            if (o.k === 'spike') { c.slowUntil = Math.max(c.slowUntil, now + RC.SPIKE_MS); emit(room, { ev: 'rchit', i: p.idx, k: 'spike' }); }
+            else { c.oilUntil = now + RC.OIL_MS; c.oilV = c.v; emit(room, { ev: 'rchit', i: p.idx, k: 'oil' }); }
+          }
+          continue;
+        }
+        if (o.k !== 'bridge' && o.k !== 'lift') continue;
+        if (prevFront <= o.x && front > o.x && rcUp(o, t) && (o.k === 'bridge' || c.y < 68)) {       // drove into a raised bridge / lift (a big ramp jump flies over a lift)
+          c.x = o.x - RC.CAR - 4; crash(c); c.stallUntil = now + RC.BRIDGE_STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' });
         }
       }
       if (c.x >= RC.LEN) {
@@ -666,7 +701,7 @@ function rcTick(room) {
         if (c.rank === 1) { clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), Math.min(Math.max(1000, g.ms - t), RC.AFTER_FIRST_MS)); }
       }
     }
-    cars.push([p.idx, Math.round(c.x), Math.round(c.y), Math.round(c.v), (c.air ? 1 : 0) | (now < c.stallUntil ? 2 : 0) | (now < c.slowUntil ? 4 : 0) | (c.done ? 8 : 0), Math.max(0, Math.round((c.stallUntil - now) / 100))]);
+    cars.push([p.idx, Math.round(c.x), Math.round(c.y), Math.round(c.v), (c.grounded ? 0 : 1) | (now < c.stallUntil ? 2 : 0) | (now < c.slowUntil ? 4 : 0) | (c.done ? 8 : 0) | (now < c.oilUntil ? 16 : 0), Math.max(0, Math.round((c.stallUntil - now) / 100)), Math.round(c.grounded ? Math.max(0, c.gvy) : c.vy)]);
   }
   emit(room, { ev: 'rc', t, c: cars });
   if (!room.rcAllDone && here(room).length && here(room).every((p) => p.rc && p.rc.done)) { room.rcAllDone = true; clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }

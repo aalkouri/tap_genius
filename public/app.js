@@ -903,11 +903,12 @@
     // ---- bridge / lift openness (0 flat .. 1 fully raised); fully raised = blocking, exactly as the server decides
     const openness = (o, t) => { const c = (((t + o.ph) % o.per) + o.per) % o.per; if (c < o.up) return 1; if (c >= o.per - 500) return (c - (o.per - 500)) / 500; if (c < o.up + 400) return 1 - (c - o.up) / 400; return 0; };
 
+    const rcBall = (o, t) => { const p = (((t + o.ph) % o.per) + o.per) % o.per / o.per; return o.hm * 4 * p * (1 - p); };       // same bounce as the server
     const drawCar = (c, sx, gy, ppu, t, isMe) => {
       const L = 44 * ppu, Hh = 15 * ppu, wr = 7.5 * ppu, y = gy - c.dy * ppu;
       ctx.save(); ctx.translate(sx, y);
       if (c.dy > 2) { ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.beginPath(); ctx.ellipse(0, gy - y, L * 0.5, 3 * ppu, 0, 0, 7); ctx.fill(); }   // ground shadow
-      if (c.f & 1) ctx.rotate(-0.12);
+      ctx.rotate(c.tilt || 0);                         // nose follows the ramp slope / the flight path
       // wheels
       [-L * 0.3, L * 0.3].forEach((wx) => {
         ctx.fillStyle = '#1b1b1b'; ctx.beginPath(); ctx.arc(wx, -wr, wr, 0, 7); ctx.fill();
@@ -967,6 +968,22 @@
           const rh = o.h * ppu; ctx.fillStyle = '#7d8590'; ctx.beginPath(); ctx.moveTo(sx, gy); ctx.lineTo(sx + sw * 0.12, gy - rh * 0.7); ctx.lineTo(sx + sw * 0.4, gy - rh); ctx.lineTo(sx + sw * 0.78, gy - rh * 0.8); ctx.lineTo(sx + sw, gy); ctx.closePath(); ctx.fill();
           ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.beginPath(); ctx.moveTo(sx + sw * 0.4, gy - rh); ctx.lineTo(sx + sw * 0.78, gy - rh * 0.8); ctx.lineTo(sx + sw * 0.55, gy - rh * 0.5); ctx.closePath(); ctx.fill();
           ctx.strokeStyle = '#4c525a'; ctx.lineWidth = Math.max(1, ppu); ctx.beginPath(); ctx.moveTo(sx + sw * 0.3, gy - rh * 0.4); ctx.lineTo(sx + sw * 0.45, gy - rh * 0.1); ctx.stroke();
+        } else if (o.k === 'ramp') {                                                                                      // wedge: drive up it, fly off the high end
+          const rh = o.h * ppu; ctx.fillStyle = '#5b6ee1'; ctx.beginPath(); ctx.moveTo(sx, gy); ctx.lineTo(sx + sw, gy - rh); ctx.lineTo(sx + sw, gy); ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = Math.max(1.5, ppu * 2); ctx.beginPath(); ctx.moveTo(sx, gy); ctx.lineTo(sx + sw, gy - rh); ctx.stroke();
+          ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = Math.max(1, ppu); for (let q = 1; q < 5; q++) { const qx = sx + sw * q / 5; ctx.beginPath(); ctx.moveTo(qx, gy); ctx.lineTo(qx, gy - rh * q / 5); ctx.stroke(); }
+        } else if (o.k === 'ball') {                                                                                      // bouncing ball: go under it or jump it
+          const d = o.w * ppu, yb = rcBall(o, t) * ppu, bx = sx + d / 2, by = gy - yb - d / 2;
+          ctx.fillStyle = `rgba(0,0,0,${0.25 * (1 - Math.min(1, yb / (110 * ppu)))})`; ctx.beginPath(); ctx.ellipse(bx, gy - ppu, d * 0.45, 3 * ppu, 0, 0, 7); ctx.fill();
+          ctx.save(); ctx.beginPath(); ctx.arc(bx, by, d / 2, 0, 7); ctx.clip(); ctx.fillStyle = '#fff'; ctx.fillRect(bx - d / 2, by - d / 2, d, d);
+          ctx.translate(bx, by); ctx.rotate((t / 300) % 6.283); ctx.fillStyle = '#e53935'; for (let q = 0; q < 3; q++) { ctx.rotate(2.094); ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, d, -0.5, 0.1); ctx.closePath(); ctx.fill(); }
+          ctx.restore(); ctx.strokeStyle = '#7a1c18'; ctx.lineWidth = Math.max(1, ppu); ctx.beginPath(); ctx.arc(bx, by, d / 2, 0, 7); ctx.stroke();
+        } else if (o.k === 'spike') {                                                                                     // spike trap
+          const n = Math.max(3, Math.round(o.w / 12)), tw = sw / n; ctx.fillStyle = '#8a8f98'; ctx.fillRect(sx, gy - 3 * ppu, sw, 3 * ppu);
+          for (let q = 0; q < n; q++) { ctx.fillStyle = '#c9ced6'; ctx.beginPath(); ctx.moveTo(sx + q * tw, gy - 3 * ppu); ctx.lineTo(sx + (q + 0.5) * tw, gy - o.h * ppu - 3 * ppu); ctx.lineTo(sx + (q + 1) * tw, gy - 3 * ppu); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#555a63'; ctx.lineWidth = Math.max(1, ppu * 0.7); ctx.stroke(); }
+        } else if (o.k === 'oil') {                                                                                       // oil slick
+          const cxo = sx + sw / 2; ctx.fillStyle = '#14121b'; ctx.beginPath(); ctx.ellipse(cxo, gy + ppu, sw / 2, 4.5 * ppu, 0, 0, 7); ctx.fill();
+          ctx.fillStyle = 'rgba(120,200,255,.4)'; ctx.beginPath(); ctx.ellipse(cxo - sw * 0.15, gy, sw * 0.18, 1.6 * ppu, 0, 0, 7); ctx.fill(); ctx.fillStyle = 'rgba(255,140,220,.35)'; ctx.beginPath(); ctx.ellipse(cxo + sw * 0.18, gy + 2 * ppu, sw * 0.14, 1.4 * ppu, 0, 0, 7); ctx.fill();
         } else {
           const op = openness(o, t), up = op >= 0.999;
           ctx.fillStyle = '#2b2b2b'; ctx.fillRect(sx - 3 * ppu, gy - 6 * ppu, sw + 6 * ppu, 6 * ppu);                  // the frame it sits in
@@ -983,6 +1000,8 @@
           ctx.fillStyle = '#444'; ctx.fillRect(sx + sw * 0.5 - ppu, gy - 70 * ppu, 2 * ppu, 64 * ppu);
         }
       }
+      { let tgt = 0; const rp = rc.track.find((o) => o.k === 'ramp' && c.dx > o.x && c.dx < o.x + o.w);   // car pitch: slope on a ramp, flight path in the air
+        if (!(c.f & 1) && rp) tgt = -Math.atan(rp.h / rp.w); else if (c.f & 1) tgt = -Math.atan2(c.vy || 0, Math.max(120, c.v)) * 0.9; c.tilt = (c.tilt || 0) + (tgt - (c.tilt || 0)) * 0.3; }
       // car + labels
       drawCar(c, (c.dx - camX) * ppu, gy, ppu, t, c.i === myId);
       ctx.font = `700 ${Math.max(10, Math.round(big ? 13 : 10))}px system-ui,sans-serif`; ctx.textBaseline = 'top';
@@ -1018,7 +1037,7 @@
       const order = [...all].sort((a, b) => (b.rank ? 1e6 - b.rank : b.dx) - (a.rank ? 1e6 - a.rank : a.dx));
       const place = order.indexOf(meC) + 1;
       document.getElementById('rcpos').textContent = meC ? `🏁 ${ordinal(place)} of ${all.length}` : '';
-      document.getElementById('rcnote').textContent = !meC ? '' : meC.rank ? 'Finished!' : meC.f & 2 ? '🔧 Engine off' : meC.f & 4 ? '🐢 Slowed' : '';
+      document.getElementById('rcnote').textContent = !meC ? '' : meC.rank ? 'Finished!' : meC.f & 2 ? '🔧 Engine off' : meC.f & 16 ? '🛢️ Slippery — no braking!' : meC.f & 4 ? '🐢 Slowed' : '';
       bar.style.width = Math.max(0, 100 - ((now - t0) / g.ms) * 100) + '%';
       if (meC) Sfx.engine(Math.min(1, meC.v / 360), !(meC.f & 2) && !(meC.f & 8));
     };
@@ -1029,9 +1048,9 @@
         const now = performance.now();
         if (ev.ev === 'rc') {
           const off = ev.t - now; clockOff = haveClock ? clockOff + (off - clockOff) * 0.2 : off; haveClock = true;
-          for (const [i, x, y, v, f, st] of ev.c) {
+          for (const [i, x, y, v, f, st, vy] of ev.c) {
             const c = cars.get(i); if (!c) continue;
-            c.x = x; c.y = y; c.v = v; c.f = f; c.st = st; c.at = now;
+            c.x = x; c.y = y; c.v = v; c.f = f; c.st = st; c.vy = vy || 0; c.at = now;
             if (c.dx === 0 && x > 0) c.dx = x;
             if (i === myId) {                                          // my sounds come from the server's state, so they match what really happened
               const air = !!(f & 1), stall = !!(f & 2);
@@ -1044,6 +1063,9 @@
           const c = cars.get(ev.i); if (!c) return;
           if (ev.i === myId) {
             if (ev.k === 'big') { Sfx.play('crash'); banner = { text: 'ENGINE OFF!', color: '#ff5a4f', until: performance.now() + 1100 }; app.classList.remove('shake'); void app.offsetWidth; app.classList.add('shake'); }
+            else if (ev.k === 'spike') { Sfx.play('wrong'); banner = { text: 'SPIKES! Slowed 3s', color: '#ff8a65', until: performance.now() + 1400 }; }
+            else if (ev.k === 'oil') { Sfx.play('pop'); banner = { text: 'OIL! No braking', color: '#b39ddb', until: performance.now() + 1200 }; }
+            else if (ev.k === 'ball') { Sfx.play('thunk'); banner = { text: 'BOINK! Ball in the way', color: '#ffd23f', until: performance.now() + 900 }; }
             else { Sfx.play('thunk'); banner = { text: 'BONK! Jump it!', color: '#ffd23f', until: performance.now() + 900 }; }
           }
         } else if (ev.ev === 'rcfinish') {
