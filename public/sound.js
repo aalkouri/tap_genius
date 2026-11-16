@@ -26,7 +26,7 @@ window.Sfx = (() => {
   // ---- background music: one looping track, quiet under the effects; starts on the first tap ----
   const music = (() => {
     let el = null, wanted = false;
-    const play = () => { if (muted || !wanted || document.hidden) return; if (!el) { el = new Audio('/audio/bgmusic.mp3'); el.loop = true; el.volume = 0.28; el.preload = 'auto'; window.__music = el; }
+    const play = () => { if (muted || !wanted || document.hidden) return; if (!el) { el = new Audio('/audio/bgmusic.m4a'); el.loop = true; el.volume = 0.28; el.preload = 'auto'; window.__music = el; }
       const pr = el.play(); if (pr && pr.catch) pr.catch(() => { }); };
     return {
       start() { wanted = true; play(); },
