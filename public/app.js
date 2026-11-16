@@ -1185,6 +1185,7 @@
     exitBtn.addEventListener('contextmenu', (e) => e.preventDefault());
   })();
   function render() {
+    document.body.classList.remove('home');                       // only the title screen shows the artwork sharp (see #scene in style.css)
     exitBtn.hidden = !(S && S.isHost && S.state !== 'lobby');
     clearInterval(timerId);
     if (S && (S.state === 'countdown' || S.state === 'play')) {     // set up once; ignore re-broadcasts while it runs
@@ -1251,7 +1252,7 @@
         <button id="create" class="secondary host"><span class="lbl">Host a new game</span><svg class="crown" viewBox="0 0 48 40" aria-hidden="true"><path d="M5 32L3 11l11 9L24 4l10 16 11-9-2 21z" fill="#ffc928" stroke="#a85a12" stroke-width="3" stroke-linejoin="round"/><rect x="5" y="31" width="38" height="6" rx="3" fill="#ffab1a" stroke="#a85a12" stroke-width="3"/><circle cx="24" cy="5" r="3" fill="#ffe680"/><circle cx="3.5" cy="11" r="2.5" fill="#ffe680"/><circle cx="44.5" cy="11" r="2.5" fill="#ffe680"/></svg></button>
         <div class="tagline">Tap fast. Think faster!</div>
         <div class="err">${esc(err)}</div></div></div>`;
-      app.innerHTML = h; playLogo();
+      app.innerHTML = h; document.body.classList.add('home'); playLogo();
       const go = (to) => {                                           // both paths need a name, then a picture
         hostName = document.getElementById('name').value.trim();
         if (!hostName) { err = 'Enter a name'; return render(); }
