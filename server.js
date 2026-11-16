@@ -11,13 +11,13 @@ const QUESTION_MS = { '2-5': 30000, '6-10': 20000, '11+': 20000 }; // little one
 const ROUNDS = 10, MAX_PLAYERS = 50, ROOM_IDLE_MS = 2 * 3600e3;
 
 // ---------- question bank: questions/<category>.json (built by tools/build_questions.py) ----------
-// Questions whose picture is a file under public/img/ are skipped when that file is missing (e.g. Disney art not added yet).
+// Questions whose picture is a file under public/img/ are skipped when that file is missing.
 const CATS = [];   // [{ id, name, icon, counts: {band: n} }] in display order
 const BANK = {};   // BANK[cat][band] = [question]
 const BYID = new Map();
 (function loadBank() {
   const dir = path.join(__dirname, 'questions');
-  const ORDER = ['disney', 'animals', 'shapes', 'colors', 'numbers', 'fruits_veg', 'dinosaurs', 'space', 'ocean', 'vehicles'];
+  const ORDER = ['animals', 'shapes', 'colors', 'numbers', 'fruits_veg', 'dinosaurs', 'space', 'ocean', 'vehicles'];
   let files = []; try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch (e) { }
   files.sort((a, b) => (ORDER.indexOf(a.slice(0, -5)) + 100) % 100 - (ORDER.indexOf(b.slice(0, -5)) + 100) % 100);
   for (const f of files) {

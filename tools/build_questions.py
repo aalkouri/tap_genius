@@ -5,7 +5,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 from qgen.common import BANDS, N, rng_for
 
-ORDER = ["disney", "animals", "shapes", "colors", "numbers", "fruits_veg", "dinosaurs", "space", "ocean", "vehicles"]
+ORDER = ["animals", "shapes", "colors", "numbers", "fruits_veg", "dinosaurs", "space", "ocean", "vehicles"]
 
 
 def validate(q, where):
