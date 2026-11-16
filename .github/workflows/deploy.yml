@@ -43,7 +43,8 @@ jobs:
           SHA="${GITHUB_SHA}"
           cat > cmd.sh <<EOF
           set -euo pipefail
-          W=\$(mktemp -d); cd "\$W"
+          W=\$(mktemp -d); trap 'cd /; rm -rf "\$W"' EXIT   # /tmp is a small tmpfs: never leave the tarball behind
+          cd "\$W"
           curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/${GITHUB_REPOSITORY}/tarball/${SHA}" -o src.tgz
           mkdir src && tar xzf src.tgz -C src --strip-components=1
           cd src
