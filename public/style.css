@@ -1,8 +1,8 @@
 :root { --bg:#032A6B; --bg2:#04347E; --card:#0b3f93; --card2:#1457c4; --accent:#FFC21A; --yellow:#FFE45A; --orange:#FF9A0A; --cyan:#3DE0F5; --navy:#0a2a5e; --ok:#2ecc71; --bad:#e74c3c; --txt:#fff; }
 * { box-sizing: border-box; }
-body { margin:0; background:var(--bg) radial-gradient(ellipse at 50% 0%, var(--bg2) 0%, var(--bg) 70%) fixed; color:var(--txt); font-family:system-ui,-apple-system,'Segoe UI',sans-serif; min-height:100vh; }
+body { margin:0; background:#062e67 radial-gradient(ellipse at 50% 0%, var(--bg2) 0%, var(--bg) 70%) fixed; color:var(--txt); font-family:system-ui,-apple-system,'Segoe UI',sans-serif; min-height:100vh; }
 #app { max-width:640px; margin:0 auto; padding:16px; }
-.card { background:linear-gradient(180deg,#0e48a8,var(--card)); border:1px solid rgba(110,200,255,.28); border-radius:18px; padding:20px; margin:16px 0; box-shadow:0 5px 0 rgba(2,18,56,.55); }
+.card { background:linear-gradient(180deg,rgba(26,24,100,.88),rgba(14,18,78,.92)); border:1px solid rgba(130,190,255,.35); border-radius:18px; padding:20px; margin:16px 0; box-shadow:0 5px 0 rgba(2,8,40,.6), 0 0 22px rgba(110,80,255,.28); backdrop-filter:blur(3px); }
 input, button { font:inherit; border-radius:14px; border:0; padding:14px; width:100%; margin:6px 0; }
 input { background:#fff; color:var(--navy); text-align:center; font-weight:600; outline:3px solid transparent; transition:outline-color .15s; }
 input:focus { outline-color:var(--cyan); }
@@ -64,8 +64,9 @@ ol { padding-left:24px; } li { padding:4px 0; }
 
 /* ---- brand: full logo on the title screen, compact bulb + wordmark everywhere else ---- */
 .hero { display:flex; justify-content:center; margin:0 -16px; overflow:hidden; }
-.hero video { width:100%; max-width:560px; height:auto; aspect-ratio:16/9; object-fit:cover; display:block; margin:0; background:var(--bg); pointer-events:none;
-  -webkit-mask-image:radial-gradient(ellipse 75% 62% at 50% 50%, #000 62%, transparent 100%); mask-image:radial-gradient(ellipse 75% 62% at 50% 50%, #000 62%, transparent 100%); }
+.hero video { width:100%; max-width:560px; height:auto; aspect-ratio:16/9; object-fit:cover; display:block; margin:0; background:transparent; pointer-events:none;
+  --f:linear-gradient(90deg,transparent,#000 9%,#000 91%,transparent), linear-gradient(180deg,transparent,#000 11%,#000 89%,transparent);
+  -webkit-mask-image:var(--f); mask-image:var(--f); -webkit-mask-composite:source-in; mask-composite:intersect; }
 .tagline { position:relative; z-index:1; text-align:center; margin:-2px 0 6px; font-weight:800; color:var(--cyan); letter-spacing:.04em; text-shadow:0 2px 0 var(--navy); }
 .brand { display:flex; align-items:center; justify-content:center; gap:8px; margin:12px 0 8px; }
 .brand img { width:46px; height:46px; filter:drop-shadow(0 0 10px rgba(255,214,60,.55)); }
@@ -346,3 +347,30 @@ button.small { padding:9px; font-size:.85rem; }
 #hostexit i{position:absolute;left:0;top:0;bottom:0;width:0;background:#e53935;opacity:.75}
 #hostexit span{position:relative}
 #hostexit.hold{color:#fff}
+
+/* ---- night-carnival scene behind every screen + the title-screen card ---- */
+#scene { position:fixed; inset:0; z-index:-1; background:#062e67 url(/img/bg.svg) center bottom / cover no-repeat; }
+#mute { background:rgba(14,20,80,.85); border:2px solid var(--cyan); box-shadow:0 0 14px rgba(61,224,245,.55); }
+.hero { position:relative; z-index:1; }
+.card.home { position:relative; max-width:440px; margin:-14px auto 0; padding:22px 22px 14px; border:2px solid #3de0f5; border-radius:26px;
+  background:linear-gradient(180deg,rgba(36,26,118,.92),rgba(18,16,84,.95));
+  box-shadow:0 0 0 4px #7b52e6, 0 0 0 7px #2a1670, 0 0 34px 6px rgba(123,82,230,.65), 0 14px 0 rgba(2,8,40,.5); }
+.namebox { position:relative; }
+.namebox input { margin:0 0 10px; padding:16px 96px 16px 16px; background:rgba(14,14,70,.85); color:#fff; border:2px solid #8f7dff; border-radius:16px; font-size:1.15rem; font-weight:800; }
+.namebox input::placeholder { color:rgba(255,255,255,.55); font-weight:600; }
+.namebox input:focus { outline-color:var(--cyan); }
+.cambtn { position:absolute; right:8px; top:8px; width:auto; margin:0; padding:2px 8px; background:none; box-shadow:none; color:#fff; display:flex; flex-direction:column; align-items:center; line-height:1.1; border-radius:10px; }
+.cambtn:active:not(:disabled) { transform:scale(.94); box-shadow:none; }
+.cambtn .ci { font-size:1.5rem; } .cambtn small { font-size:.7rem; font-weight:700; opacity:.9; margin-top:1px; }
+.cambtn .face { width:34px; border-width:2px; }
+#join, #create { display:flex; align-items:center; justify-content:center; gap:10px; padding:16px; font-size:1.3rem; text-transform:uppercase; letter-spacing:.02em; border-radius:16px; }
+#join { margin-top:4px; }
+#join .chev { font-size:1.7rem; line-height:1; }
+#create.host { background:linear-gradient(180deg,#3fe0d4,#1799b4); color:#05324a; box-shadow:0 5px 0 #0b6577; border:2px solid #a8fff4; }
+#create.host:active:not(:disabled) { box-shadow:0 1px 0 #0b6577; }
+.card.home .tagline { margin:8px 0 2px; font-size:1.2rem; color:var(--yellow); text-shadow:0 2px 0 #1a0f55; letter-spacing:.01em; }
+@media (min-width:900px) { .hero video { max-width:620px; } }
+
+@media (max-aspect-ratio:1/1) {   /* phones: keep the tent/hammers/mound corner and let plain sky fill above it */
+  #scene { background:url(/img/bg.svg) 14% 100% / auto 58% no-repeat, linear-gradient(180deg,#062e67 42%,#062e67); }
+}

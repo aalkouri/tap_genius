@@ -93,7 +93,7 @@
   const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   const brand = '<div class="brand"><img src="/img/bulb.png" alt=""><span>Tap Genius</span></div>';
-  const hero = '<div class="hero"><video src="/img/logo.mp4" poster="/img/logo.jpg" autoplay muted playsinline preload="auto" disablepictureinpicture aria-label="Tap Genius"></video></div><div class="tagline">Tap fast. Think faster!</div>';
+  const hero = '<div class="hero"><video src="/img/logo.mp4" poster="/img/logo.jpg" autoplay muted playsinline preload="auto" disablepictureinpicture aria-label="Tap Genius"></video></div>';
   const board = (players) => `<ol class="plist">${players.map((p) => `<li class="${p.away ? 'away' : ''}">${faceImg(p.av)}<span class="pn">${esc(p.name)}${p.away ? ' 💤' : ''}</span><span class="ps">${p.score}</span></li>`).join('')}</ol>`;
 
   // ---- camera: fit your head in the oval, tap, confirm ----
@@ -1206,12 +1206,15 @@
       return;
     }
     if (!S) {
-      h += `<div class="card">
-        ${face ? `<div class="mepic"><img class="face big" src="${face}" alt="Your picture"><button class="chip small" id="retake">Retake picture</button></div>` : ''}
-        <input id="name" placeholder="Your name" maxlength="20" value="${esc(hostName)}">
-        <button id="join">Join game</button>
-        <button id="create" class="secondary">Host a new game</button>
-        <div class="err">${esc(err)}</div></div>`;
+      h += `<div class="card home">
+        <div class="namebox">
+          <input id="name" placeholder="Your name" maxlength="20" value="${esc(hostName)}" autocomplete="nickname">
+          <button type="button" class="cambtn" id="retake" aria-label="${face ? 'Retake picture' : 'Take your picture'}">${face ? `<img class="face" src="${face}" alt="">` : '<span class="ci">📷</span>'}<small>${face ? 'Retake' : 'Camera'}</small></button>
+        </div>
+        <button id="join">Join game <span class="chev">›</span></button>
+        <button id="create" class="secondary host">Host a new game <span class="crown">👑</span></button>
+        <div class="err">${esc(err)}</div>
+        <div class="tagline">Tap fast. Think faster!</div></div>`;
       app.innerHTML = h;
       const go = (to) => {                                           // both paths need a name, then a picture
         hostName = document.getElementById('name').value.trim();
@@ -1223,7 +1226,7 @@
         if (to === 'browse') connect(() => send({ action: 'list' }));
       };
       const rt = document.getElementById('retake');
-      if (rt) rt.onclick = () => { hostName = document.getElementById('name').value.trim(); afterCam = 'home'; screen = 'camera'; render(); };
+      if (rt) rt.onclick = () => { hostName = document.getElementById('name').value.trim(); afterCam = 'home'; screen = 'camera'; render(); };   // camera button sits inside the name box
       document.getElementById('join').onclick = () => go('browse');
       document.getElementById('create').onclick = () => go('mode');
       return;
