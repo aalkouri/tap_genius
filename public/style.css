@@ -346,3 +346,4 @@ button.small { padding:9px; font-size:.85rem; }
 #hostexit i{position:absolute;left:0;top:0;bottom:0;width:0;background:#e53935;opacity:.75}
 #hostexit span{position:relative}
 #hostexit.hold{color:#fff}
+.codebox { display:flex; align-items:center; justify-content:center; gap:8px; margin:6px 0 4px; } .codebox input { width:7.5em; margin:0; text-align:center; text-transform:uppercase; letter-spacing:.15em; font-weight:900; }

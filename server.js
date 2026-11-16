@@ -129,7 +129,7 @@ function view(room, p) {
   const players = [...room.players].sort((a, b) => b.score - a.score)
     .map((x) => ({ name: x.name, score: x.score, answered: x.choice !== null, av: x.av, away: !!x.away }));
   const v = { type: 'state', state: room.state, code: room.code, isHost: p === room.host, players, you: { name: p.name, score: p.score, av: p.av } };
-  v.mode = room.mode; v.host = room.host.name;
+  v.mode = room.mode; v.host = room.host.name; v.isPublic = !!room.isPublic;
   v.config = { band: room.band, cats: room.cats };
   if (room.state === 'lobby') {
     if (room.mode === 'mini') v.mini = { games: Object.values(MINI).map(({ id, name, icon, min }) => ({ id, name, icon, min: min || 1 })), selected: room.miniGames, rounds: room.miniRounds };      // rounds 0 = each picked game once
@@ -177,7 +177,7 @@ function view(room, p) {
 }
 // ---------- game browser: players pick an open game from a live list (no room codes to type) ----------
 const browsers = new Set();   // sockets currently looking at the list
-const openGames = () => [...rooms.values()].filter((r) => r.state === 'lobby' && r.players.length < MAX_PLAYERS && here(r).length)
+const openGames = () => [...rooms.values()].filter((r) => r.isPublic && r.state === 'lobby' && r.players.length < MAX_PLAYERS && here(r).length)
   .sort((a, b) => b.created - a.created)
   .map((r) => ({ id: r.code, host: r.host.name, av: r.host.av, mode: r.mode, players: r.players.filter((p) => !p.away).length }));
 let listTimer = null;
@@ -813,7 +813,7 @@ const ACTIONS = {
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
     const av = saveAvatar(m.avatar); if (!av) return err(ws, 'Take your picture first');
-    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], miniGames: [], miniRounds: 0, ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av] };
+    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], miniGames: [], miniRounds: 0, ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av], isPublic: false };   // rooms are private until the host makes them public
     const p = { ws, name, av, room, score: 0, prev: 0, choice: null, gained: 0, token: crypto.randomBytes(12).toString('hex') };
     TOKENS.set(p.token, p);
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room); browsers.delete(ws);
@@ -824,7 +824,10 @@ const ACTIONS = {
     const name = cleanName(m.name); if (!name) return err(ws, 'Enter a name');
     if (ws.room) return;
     const room = rooms.get(String(m.id || '').toUpperCase().trim());
-    if (!room) return err(ws, 'That game is no longer open');
+    if (!room || (!room.isPublic && !m.code)) {            // private rooms can only be reached by typing their code
+      if (m.code && (ws.badCodes = (ws.badCodes || 0) + 1) > 10) return err(ws, 'Too many tries, wait a moment');
+      return err(ws, m.code ? 'No game with that code' : 'That game is no longer open');
+    }
     if (room.state !== 'lobby') return err(ws, 'Game already started');
     if (room.players.length >= MAX_PLAYERS) return err(ws, 'Room is full');
     if (room.players.some((x) => x.name.toLowerCase() === name.toLowerCase())) return err(ws, 'Name already taken');
@@ -858,6 +861,18 @@ const ACTIONS = {
     browsers.add(ws); send(ws, { type: 'list', games: openGames() });
   },
   unlist(ws) { browsers.delete(ws); },
+  visibility(ws, m) {   // host makes the game public (listed) or private (code only)
+    const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
+    room.isPublic = !!m.public; broadcast(room);
+  },
+  setcode(ws, m) {      // host picks their own room code
+    const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
+    const c = String(m.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (c.length < 3 || c.length > 8) return err(ws, 'Code must be 3 to 8 letters or numbers');
+    if (c !== room.code && rooms.has(c)) return err(ws, 'That code is already in use');
+    if (c !== room.code) { rooms.delete(room.code); room.code = c; rooms.set(c, room); }
+    broadcast(room);
+  },
   mode(ws, m) {  // host switches the lobby between Trivia and Mini Games
     const room = hostRoom(ws); if (!room || room.state !== 'lobby') return;
     if (m.mode !== 'trivia' && m.mode !== 'mini') return;
@@ -1039,6 +1054,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => { browsers.delete(ws); goAway(ws); });
 });
 // Heartbeat (CloudFront drops idle sockets) + idle room cleanup
+setInterval(() => { wss.clients.forEach((c) => { c.badCodes = 0; }); }, 60000);
 setInterval(() => {
   wss.clients.forEach((ws) => { if (!ws.isAlive) return ws.terminate(); ws.isAlive = false; ws.ping(); });
   rooms.forEach((r) => { if (Date.now() - r.last > ROOM_IDLE_MS) { r.players.forEach((p) => { clearTimeout(p.awayTimer); TOKENS.delete(p.token); send(p.ws, { type: 'left' }); if (p.ws.player === p) { p.ws.room = null; p.ws.player = null; } }); closeRoom(r); listChanged(); } });

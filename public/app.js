@@ -2,7 +2,7 @@
   const app = document.getElementById('app');
   let ws, S = null, err = '', timerId = null, standKey = null, anim = null, doneKey = null;
   let screen = 'home', hostName = '', liveKey = null, live = null;   // home | mode (game-type picker) | browse (open games); live = running countdown / mini game
-  let games = [];
+  let games = [], codeDraft = '';
   // each player's head shot (a small JPEG data URL), taken once and remembered on this device
   let face = null, afterCam = 'home', cam = null;
   try { face = localStorage.getItem('tg_face'); hostName = localStorage.getItem('tg_name') || ''; } catch (e) { }
@@ -22,7 +22,7 @@
     sock.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'ev') { if (live && live.onEvent) live.onEvent(m); return; }   // in-game events never re-render
-      if (m.type === 'list') { games = m.games; if (!S && screen === 'browse') render(); return; }
+      if (m.type === 'list') { games = m.games; if (!S && screen === 'browse' && !(document.activeElement && document.activeElement.id === 'code')) render(); return; }   // don't steal focus while typing a code
       if (m.type === 'pong') { pongOk = true; return; }
       if (m.type === 'session') {
         if (m.expired) return giveUp('Your game has ended, or you were away too long.');
@@ -1199,8 +1199,16 @@
             <div class="gt"><b>${esc(g.host)}'s game</b><small>${MODE[g.mode][0]} ${MODE[g.mode][1]} · ${g.players} player${g.players === 1 ? '' : 's'} waiting</small></div>
             <button class="joinbtn" data-id="${esc(g.id)}">Join game</button>
           </div>`).join('') : '<div class="card"><p class="muted">No open games right now.<br>Ask someone to host one — it will appear here automatically.</p></div>'}
+        <div class="card"><b>Have a code?</b>
+          <input id="code" placeholder="Room code" maxlength="8" autocapitalize="characters" autocomplete="off" value="${esc(codeDraft)}">
+          <button id="codego">Join private game</button></div>
         <button class="secondary small" id="back">← Back</button>
         <div class="err">${esc(err)}</div>`;
+      const cin = document.getElementById('code');
+      cin.oninput = () => { codeDraft = cin.value; };
+      const goCode = () => { const v = cin.value.trim(); if (!v) { err = 'Enter a room code'; return render(); } send({ action: 'join', name: hostName, id: v, code: v, avatar: face }); };
+      document.getElementById('codego').onclick = goCode;
+      cin.onkeydown = (e) => { if (e.key === 'Enter') goCode(); };
       app.querySelectorAll('.joinbtn').forEach((b) => (b.onclick = () => send({ action: 'join', name: hostName, id: b.dataset.id, avatar: face })));
       document.getElementById('back').onclick = () => { send({ action: 'unlist' }); screen = 'home'; err = ''; render(); };
       return;
@@ -1231,7 +1239,11 @@
     // lobby title; the host can flip between Trivia and Mini Games here while everyone waits
     const lobbyHead = () => `<div class="card"><div class="gname">${esc(S.host)}'s game</div>${S.isHost
       ? `<div class="chips modes">${[['trivia', '🧠 Trivia'], ['mini', '🎮 Mini Games']].map(([m, l]) => `<button class="chip ${S.mode === m ? 'on' : ''}" data-setmode="${m}">${l}</button>`).join('')}</div>`
-      : `<div class="muted">${S.mode === 'mini' ? '🎮 Mini Games' : '🧠 Trivia'}</div>`}</div>`;
+      : `<div class="muted">${S.mode === 'mini' ? '🎮 Mini Games' : '🧠 Trivia'}</div>`}
+      ${S.isHost
+        ? `<div class="chips modes"><button class="chip ${S.isPublic ? 'on' : ''}" id="vis">${S.isPublic ? '🌐 Public — listed for everyone' : '🔒 Private — code only'}</button></div>
+           <div class="codebox"><span class="muted">Room code</span> <input id="roomcode" value="${esc(S.code)}" maxlength="8" autocapitalize="characters" autocomplete="off"><button class="chip small" id="savecode">Change</button></div>`
+        : `<div class="muted">${S.isPublic ? '🌐 Public' : '🔒 Private'} · Code <b>${esc(S.code)}</b></div>`}</div>`;
     if (S.state === 'lobby' && S.mode === 'mini') {
       const m = S.mini, sel = new Set(m.selected), here = S.players.filter((x) => !x.away).length;
       const usable = m.games.filter((g) => sel.has(g.id) && g.min <= here);
@@ -1297,6 +1309,9 @@
 
     document.querySelectorAll('.choice').forEach((b) => (b.onclick = () => send({ action: 'answer', choice: +b.dataset.i })));
     const on = (id, a) => { const el = document.getElementById(id); if (el) el.onclick = () => send({ action: a }); };
+    const vis = document.getElementById('vis'); if (vis) vis.onclick = () => send({ action: 'visibility', public: !S.isPublic });
+    const sc = document.getElementById('savecode'), rcI = document.getElementById('roomcode');
+    if (sc) { const saveCode = () => { if (rcI.value.trim().toUpperCase() !== S.code) send({ action: 'setcode', code: rcI.value }); }; sc.onclick = saveCode; rcI.onkeydown = (e) => { if (e.key === 'Enter') saveCode(); }; }
     on('start', 'start'); on('next', 'next'); on('again', 'again'); on('leave', 'leave');
     document.querySelectorAll('[data-setmode]').forEach((b) => (b.onclick = () => { if (b.dataset.setmode !== S.mode) send({ action: 'mode', mode: b.dataset.setmode }); }));
     document.querySelectorAll('[data-game]').forEach((b) => (b.onclick = () => {
