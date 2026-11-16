@@ -8,3 +8,6 @@ ios/App/App/capacitor.config.json
 ios/App/CapApp-SPM/.build/
 ios/DerivedData/
 *.xcuserstate
+
+# Android
+android/*.keystore
