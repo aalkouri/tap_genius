@@ -1,33 +1,18 @@
-# Android (Trusted Web Activity)
+# Android app (Capacitor shell)
 
-The app is a thin Chrome wrapper around https://tap.alkouri.com (built with Bubblewrap from `twa-manifest.json`).
-Game updates ship with each deploy; you only rebuild to change the icon, name or package settings.
+Same idea as the iOS app: `capacitor.config.json` points the WebView at https://tap.alkouri.com, so web deploys update the app
+instantly. Package `com.alkouri.tapgenius`, portrait, camera permission for the face photo.
 
-## Build
-Actions tab -> **Android build -> APK + AAB** -> Run workflow. Download the artifacts:
-- `tap-genius-apk` -> sideload (enable "install unknown apps", open the file).
-- `tap-genius-aab` -> upload to Play Console (internal testing first).
+## Run on a phone or emulator
+    npm ci
+    npx cap sync android
+    npx cap open android      # opens Android Studio; press Run
 
-Without keystore secrets the run uses a throwaway key: fine for sideloading, **not** for Play.
+(Phone: enable USB debugging, plug in, pick it in the device list.)
 
-## Stable signing key (needed for Play)
-Create it once and keep a backup outside the repo (losing it means you can't update the app):
-
-    keytool -genkeypair -keystore tap.keystore -alias tapgenius -keyalg RSA -keysize 2048 -validity 10000
-    base64 -w0 tap.keystore      # paste into the secret below
-
-Repo secrets: `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD` (store and key password must match), `ANDROID_KEY_ALIAS` (`tapgenius`).
-
-## Hide the browser URL bar (Digital Asset Links)
-Chrome shows a URL bar until the site vouches for the app. Create `public/.well-known/assetlinks.json`:
-
-    [{"relation":["delegate_permission/common.handle_all_urls"],
-      "target":{"namespace":"android_app","package_name":"com.alkouri.tapgenius",
-                "sha256_cert_fingerprints":["<SHA-256 from the workflow log>"]}}]
-
-If you use Play App Signing (the default), also add the **App signing key** SHA-256 from
-Play Console -> Setup -> App signing. Push to deploy, then reinstall.
-
-## Play Store
-$25 one-time developer account. The "Ages 2-5" band means Google's Families Policy applies:
-privacy policy URL, content rating, and the face-photo feature will be reviewed.
+## Release build for Play
+Android Studio -> Build -> Generate Signed App Bundle / APK -> Android App Bundle. Create a new keystore the first time and
+**back it up outside the repo** (keystores are git-ignored). Bump `versionCode` in `android/app/build.gradle` for every upload.
+Upload the `.aab` to Play Console (internal testing first). Needs a $25 developer account; the "Ages 2-5" band means Google's
+Families Policy review (privacy policy URL, content rating, camera use explained).
+For a sideload APK pick APK instead of Bundle.
