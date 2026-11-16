@@ -1,0 +1,7 @@
+[Unit]
+Description=Hourly copy of the Tap Genius activity log to S3
+[Timer]
+OnCalendar=*:07
+Persistent=true
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,5 @@
+[Unit]
+Description=Copy the Tap Genius activity log to S3
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tap-genius-ship-logs

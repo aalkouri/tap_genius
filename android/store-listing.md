@@ -48,7 +48,8 @@ results screen. Feature graphic: 1024x500 PNG (logo on the navy #032A6B backgrou
     ephemerally** (held in memory only, deleted when the game ends), required for the app's core feature (avatar) - photos are optional.
   - Is all data encrypted in transit? Yes (HTTPS/WSS).
   - Can users request deletion? Data is auto-deleted when the room closes; provide the contact email for requests.
-  - No data is sold, no ads, no analytics.
+  - No data is sold, no ads, no third-party analytics. (The server keeps an anonymous activity log - room and game counts, no
+    names, photos, IPs or device IDs. Check whether your Data safety answers need to mention it.)
 - **Permissions declaration:** CAMERA - used only for the avatar selfie. It is not required (camera feature is optional).
 - **News app / Government / Health / Financial:** No to all.
 
