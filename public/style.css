@@ -374,3 +374,4 @@ button.small { padding:9px; font-size:.85rem; }
 @media (max-aspect-ratio:1/1) {   /* phones: keep the tent/hammers/mound corner and let plain sky fill above it */
   #scene { background:url(/img/bg.svg) 14% 100% / auto 58% no-repeat, linear-gradient(180deg,#062e67 42%,#062e67); }
 }
+.codebox { display:flex; align-items:center; justify-content:center; gap:8px; margin:6px 0 4px; } .codebox input { width:7.5em; margin:0; text-align:center; text-transform:uppercase; letter-spacing:.15em; font-weight:900; }
