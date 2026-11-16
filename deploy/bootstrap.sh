@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Record of the one-time AWS setup for Tap Genius (tg.alkouri.com). It SHARES the girl_game EC2 instance:
-#   girl_game  -> :80   (systemd "game",        /opt/game)        -> CloudFront -> game.alkouri.com
-#   tap genius -> :8081 (systemd "tap-genius",  /opt/tap-genius)  -> CloudFront -> tg.alkouri.com
+# Record of the one-time AWS setup for Tap Genius (tap.alkouri.com). It SHARES the girl_game EC2 instance:
+#   girl_game  -> :80   (systemd "game",        /opt/game)        -> CloudFront -> island.alkouri.com
+#   tap genius -> :8081 (systemd "tap-genius",  /opt/tap-genius)  -> CloudFront -> tap.alkouri.com
 # Needs admin AWS credentials. Already applied; kept for reproducibility. Steps 4-5 need DNS records at your DNS provider.
 set -euo pipefail
 R=us-west-1; IID=i-00966cc1ee771d0cc; VPC=vpc-03351a3947a37dd12
@@ -24,15 +24,15 @@ aws ssm send-command --region $R --instance-ids $IID --document-name AWS-RunShel
 #    policy = ssm:SendCommand on this instance + AWS-RunShellScript, ssm:GetCommandInvocation/ListCommandInvocations.
 
 # 4. ACM cert (must be us-east-1 for CloudFront) -> add the printed validation CNAME at your DNS provider
-CERT=$(aws acm request-certificate --region us-east-1 --domain-name tg.alkouri.com --validation-method DNS --query CertificateArn --output text)
+CERT=$(aws acm request-certificate --region us-east-1 --domain-name tap.alkouri.com --validation-method DNS --query CertificateArn --output text)
 aws acm describe-certificate --region us-east-1 --certificate-arn "$CERT" --query 'Certificate.DomainValidationOptions[0].ResourceRecord'
 aws acm wait certificate-validated --region us-east-1 --certificate-arn "$CERT"
 
-# 5. CloudFront: alias tg.alkouri.com, origin = instance DNS on port 8081, no caching, WebSockets work by default.
+# 5. CloudFront: alias tap.alkouri.com, origin = instance DNS on port 8081, no caching, WebSockets work by default.
 IP=$(aws ec2 describe-instances --region $R --instance-ids $IID --query 'Reservations[0].Instances[0].PublicDnsName' --output text)
 cat > /tmp/tg-cf.json <<CF
 {"CallerReference":"tap-genius-$(date +%s)","Comment":"tap genius","Enabled":true,"HttpVersion":"http2and3",
- "Aliases":{"Quantity":1,"Items":["tg.alkouri.com"]},
+ "Aliases":{"Quantity":1,"Items":["tap.alkouri.com"]},
  "ViewerCertificate":{"ACMCertificateArn":"$CERT","SSLSupportMethod":"sni-only","MinimumProtocolVersion":"TLSv1.2_2021"},
  "Origins":{"Quantity":1,"Items":[{"Id":"ec2","DomainName":"$IP",
    "CustomOriginConfig":{"HTTPPort":8081,"HTTPSPort":443,"OriginProtocolPolicy":"http-only","OriginReadTimeout":60}}]},
@@ -41,4 +41,4 @@ cat > /tmp/tg-cf.json <<CF
    "CachePolicyId":"4135ea2d-6df8-44a3-9df3-4b5a84be39ad","OriginRequestPolicyId":"b689b0a8-53d0-40ab-baf2-68738e2966ac","Compress":true}}
 CF
 aws cloudfront create-distribution --distribution-config file:///tmp/tg-cf.json --query Distribution.DomainName --output text
-# Then add CNAME: tg.alkouri.com -> <that cloudfront domain>
+# Then add CNAME: tap.alkouri.com -> <that cloudfront domain>
