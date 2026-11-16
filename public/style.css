@@ -64,9 +64,8 @@ ol { padding-left:24px; } li { padding:4px 0; }
 
 /* ---- brand: full logo on the title screen, compact bulb + wordmark everywhere else ---- */
 .hero { display:flex; justify-content:center; margin:0 -16px; overflow:hidden; }
-.hero img { width:128%; max-width:560px; height:auto; display:block; margin:-26px 0 -34px; animation:bob 4.5s ease-in-out infinite;
-  -webkit-mask-image:radial-gradient(ellipse 60% 58% at 50% 50%, #000 62%, transparent 100%); mask-image:radial-gradient(ellipse 60% 58% at 50% 50%, #000 62%, transparent 100%); }
-@keyframes bob { 0%,100% { transform:translateY(0) } 50% { transform:translateY(-6px) } }
+.hero video { width:100%; max-width:560px; height:auto; aspect-ratio:16/9; object-fit:cover; display:block; margin:0; background:var(--bg); pointer-events:none;
+  -webkit-mask-image:radial-gradient(ellipse 75% 62% at 50% 50%, #000 62%, transparent 100%); mask-image:radial-gradient(ellipse 75% 62% at 50% 50%, #000 62%, transparent 100%); }
 .tagline { position:relative; z-index:1; text-align:center; margin:-2px 0 6px; font-weight:800; color:var(--cyan); letter-spacing:.04em; text-shadow:0 2px 0 var(--navy); }
 .brand { display:flex; align-items:center; justify-content:center; gap:8px; margin:12px 0 8px; }
 .brand img { width:46px; height:46px; filter:drop-shadow(0 0 10px rgba(255,214,60,.55)); }

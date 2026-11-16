@@ -93,7 +93,7 @@
   const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   const brand = '<div class="brand"><img src="/img/bulb.png" alt=""><span>Tap Genius</span></div>';
-  const hero = '<div class="hero"><img src="/img/logo.jpg" alt="Tap Genius"></div><div class="tagline">Tap fast. Think faster!</div>';
+  const hero = '<div class="hero"><video src="/img/logo.mp4" poster="/img/logo.jpg" autoplay loop muted playsinline preload="auto" disablepictureinpicture aria-label="Tap Genius"></video></div><div class="tagline">Tap fast. Think faster!</div>';
   const board = (players) => `<ol class="plist">${players.map((p) => `<li class="${p.away ? 'away' : ''}">${faceImg(p.av)}<span class="pn">${esc(p.name)}${p.away ? ' 💤' : ''}</span><span class="ps">${p.score}</span></li>`).join('')}</ol>`;
 
   // ---- camera: fit your head in the oval, tap, confirm ----
