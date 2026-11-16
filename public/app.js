@@ -93,7 +93,35 @@
   const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   const brand = '<div class="brand"><img src="/img/bulb.png" alt=""><span>Tap Genius</span></div>';
-  const hero = '<div class="hero"><video src="/img/logo.mp4" poster="/img/logo.jpg" autoplay muted playsinline preload="auto" disablepictureinpicture aria-label="Tap Genius"></video></div><div class="tagline">Tap fast. Think faster!</div>';
+  // Title logo: the clip has a flat navy backdrop, so it is drawn to a canvas with that colour keyed out (plays once, holds the last frame).
+  const hero = '<div class="hero"><img class="logostill" src="/img/logo-still.webp" alt="Tap Genius"><canvas class="logocv" width="640" height="360" aria-hidden="true"></canvas></div>';
+  let logoVid = null;
+  function playLogo() {
+    const cv = document.querySelector('.logocv'), still = document.querySelector('.logostill');
+    if (!cv) return;
+    if (logoVid) { logoVid.pause(); logoVid.removeAttribute('src'); logoVid.load(); }
+    const v = logoVid = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto'; v.src = '/img/logo.mp4';
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    let shown = false;
+    const draw = () => {
+      if (v !== logoVid || !cv.isConnected) return;
+      if (v.readyState >= 2) {
+        cx.drawImage(v, 0, 0, cv.width, cv.height);
+        const im = cx.getImageData(0, 0, cv.width, cv.height), d = im.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i] - 6, g = d[i + 1] - 46, b = d[i + 2] - 103, k = (Math.sqrt(r * r + g * g + b * b) - 57) / 53;   // distance from the navy backdrop
+          if (k < 1) d[i + 3] = k <= 0 ? 0 : k * 255;
+        }
+        cx.putImageData(im, 0, 0);
+        if (!shown) { shown = true; cv.classList.add('on'); if (still) still.classList.add('off'); }
+      }
+      if (!v.ended) (v.requestVideoFrameCallback ? v.requestVideoFrameCallback(draw) : requestAnimationFrame(draw));
+    };
+    v.addEventListener('ended', draw);
+    const pr = v.play(); if (pr && pr.catch) pr.catch(() => { });   // if autoplay is refused the still logo simply stays
+    draw();
+  }
   const board = (players) => `<ol class="plist">${players.map((p) => `<li class="${p.away ? 'away' : ''}">${faceImg(p.av)}<span class="pn">${esc(p.name)}${p.away ? ' 💤' : ''}</span><span class="ps">${p.score}</span></li>`).join('')}</ol>`;
 
   // ---- camera: fit your head in the oval, tap, confirm ----
@@ -1157,6 +1185,7 @@
     exitBtn.addEventListener('contextmenu', (e) => e.preventDefault());
   })();
   function render() {
+    document.body.classList.remove('home');                       // only the title screen shows the artwork sharp (see #scene in style.css)
     exitBtn.hidden = !(S && S.isHost && S.state !== 'lobby');
     clearInterval(timerId);
     if (S && (S.state === 'countdown' || S.state === 'play')) {     // set up once; ignore re-broadcasts while it runs
@@ -1214,13 +1243,16 @@
       return;
     }
     if (!S) {
-      h += `<div class="card">
-        ${face ? `<div class="mepic"><img class="face big" src="${face}" alt="Your picture"><button class="chip small" id="retake">Retake picture</button></div>` : ''}
-        <input id="name" placeholder="Your name" maxlength="20" value="${esc(hostName)}">
-        <button id="join">Join game</button>
-        <button id="create" class="secondary">Host a new game</button>
-        <div class="err">${esc(err)}</div></div>`;
-      app.innerHTML = h;
+      h = `<div class="titlescreen">${hero}<div class="card home">
+        <div class="namebox">
+          <input id="name" placeholder="Your name" maxlength="20" value="${esc(hostName)}" autocomplete="nickname">
+          <button type="button" class="cambtn" id="retake" aria-label="${face ? 'Retake picture' : 'Take your picture'}">${face ? `<img class="face" src="${face}" alt="">` : '<svg class="ci" viewBox="0 0 48 40" aria-hidden="true"><defs><linearGradient id="camg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a9c0ff"/><stop offset="1" stop-color="#6f7cf2"/></linearGradient></defs><path d="M15 6l3-4h12l3 4h7a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5V11a5 5 0 0 1 5-5z" fill="url(#camg)" stroke="#2a2f8f" stroke-width="2.5" stroke-linejoin="round"/><circle cx="24" cy="21" r="9" fill="#3b46c4" stroke="#e8eeff" stroke-width="2.5"/><circle cx="24" cy="21" r="4.5" fill="#7fd6ff"/><circle cx="21.5" cy="18.5" r="1.8" fill="#fff"/><rect x="36" y="10.5" width="5" height="3" rx="1.5" fill="#e8eeff"/></svg>'}<small>${face ? 'Retake' : 'Camera'}</small></button>
+        </div>
+        <button id="join"><span class="lbl">Join game</span><svg class="chev" viewBox="0 0 24 32" aria-hidden="true"><path d="M6 5l12 11L6 27" fill="none" stroke="#1b1f5c" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="create" class="secondary host"><span class="lbl">Host a new game</span><svg class="crown" viewBox="0 0 48 40" aria-hidden="true"><path d="M5 32L3 11l11 9L24 4l10 16 11-9-2 21z" fill="#ffc928" stroke="#a85a12" stroke-width="3" stroke-linejoin="round"/><rect x="5" y="31" width="38" height="6" rx="3" fill="#ffab1a" stroke="#a85a12" stroke-width="3"/><circle cx="24" cy="5" r="3" fill="#ffe680"/><circle cx="3.5" cy="11" r="2.5" fill="#ffe680"/><circle cx="44.5" cy="11" r="2.5" fill="#ffe680"/></svg></button>
+        <div class="tagline">Tap fast. Think faster!</div>
+        <div class="err">${esc(err)}</div></div></div>`;
+      app.innerHTML = h; document.body.classList.add('home'); playLogo();
       const go = (to) => {                                           // both paths need a name, then a picture
         hostName = document.getElementById('name').value.trim();
         if (!hostName) { err = 'Enter a name'; return render(); }
@@ -1231,7 +1263,7 @@
         if (to === 'browse') connect(() => send({ action: 'list' }));
       };
       const rt = document.getElementById('retake');
-      if (rt) rt.onclick = () => { hostName = document.getElementById('name').value.trim(); afterCam = 'home'; screen = 'camera'; render(); };
+      if (rt) rt.onclick = () => { hostName = document.getElementById('name').value.trim(); afterCam = 'home'; screen = 'camera'; render(); };   // camera button sits inside the name box
       document.getElementById('join').onclick = () => go('browse');
       document.getElementById('create').onclick = () => go('mode');
       return;
