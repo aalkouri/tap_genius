@@ -1245,8 +1245,8 @@
       : `<div class="muted">${S.mode === 'mini' ? '🎮 Mini Games' : '🧠 Trivia'}</div>`}
       ${S.isHost
         ? `<div class="chips modes"><button class="chip ${S.isPublic ? 'on' : ''}" id="vis">${S.isPublic ? '🌐 Public — listed for everyone' : '🔒 Private — code only'}</button></div>
-           <div class="codebox"><span class="muted">Room code</span> <input id="roomcode" value="${esc(S.code)}" maxlength="8" autocapitalize="characters" autocomplete="off"><button class="chip small" id="savecode">Change</button></div>`
-        : `<div class="muted">${S.isPublic ? '🌐 Public' : '🔒 Private'} · Code <b>${esc(S.code)}</b></div>`}</div>`;
+           ${S.isPublic ? '' : `<div class="codebox"><span class="muted">Room code</span> <input id="roomcode" value="${esc(S.code)}" maxlength="8" autocapitalize="characters" autocomplete="off"><button class="chip small" id="savecode">Change</button></div>`}`
+        : `<div class="muted">${S.isPublic ? '🌐 Public' : `🔒 Private · Code <b>${esc(S.code)}</b>`}</div>`}</div>`;
     if (S.state === 'lobby' && S.mode === 'mini') {
       const m = S.mini, sel = new Set(m.selected), here = S.players.filter((x) => !x.away).length;
       const usable = m.games.filter((g) => sel.has(g.id) && g.min <= here);
