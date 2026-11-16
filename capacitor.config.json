@@ -1,0 +1,14 @@
+{
+  "appId": "com.alkouri.tapgenius",
+  "appName": "Tap Genius",
+  "webDir": "public",
+  "server": {
+    "url": "https://tap.alkouri.com",
+    "cleartext": false
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#032A6B",
+    "limitsNavigationsToAppBoundDomains": false
+  }
+}
