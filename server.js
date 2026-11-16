@@ -969,6 +969,12 @@ const ACTIONS = {
     room.state = 'lobby'; room.qIndex = -1; room.players.forEach((p) => { p.score = 0; p.prev = 0; p.choice = null; p.gained = 0; });
     broadcast(room);
   },
+  tolobby(ws) {   // host aborts whatever is running (any screen) and takes everyone back to the lobby with scores reset
+    const room = hostRoom(ws); if (!room || room.state === 'lobby') return;
+    clearTimeout(room.timer); clearTimeout(room.spawnTimer); clearInterval(room.tick); miniCleanup(room);
+    room.state = 'lobby'; room.qIndex = -1; room.players.forEach((p) => { p.score = 0; p.prev = 0; p.choice = null; p.gained = 0; });
+    broadcast(room);
+  },
 };
 const err = (ws, message) => send(ws, { type: 'error', message });
 const hostRoom = (ws) => (ws.room && ws.room.host === ws.player ? ws.room : null);
