@@ -587,7 +587,7 @@ const lev1 = (a, b) => {                                                        
 // ---------- RC Mayhem ----------
 // Every player drives an identical lane. The server runs all the physics (30 Hz) so the race is fair:
 //  - log (small) and rock (big) are SOLID blocks: driving into one stops you dead at its face (log: you are slowed, rock: engine cuts out for
-//    a couple of seconds). Jump over, or jump ONTO the top and drive along it / off the end.
+//    a couple of seconds). Jump clean over them: landing ON TOP of a log or rock also cuts the engine for a couple of seconds.
 const RC = { LEN: 7200, CARH: 46, SPIKE_MS: 3000, OIL_MS: 1000, MAXV: 360, ACC: 520, DECEL: 240, BRAKE: 700, G: 1500, JV: 520, CAR: 22, TICK: 33,
   STALL_MS: 2600, SLOW_MS: 900, AFTER_FIRST_MS: 15000, POINTS: [10, 7, 5, 4, 3, 2] };
 function mulberry(seed) { return () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -598,7 +598,7 @@ function makeTrack() {
   while (x < RC.LEN - 450) {
     const roll = r(); let o, gap = 110 + Math.floor(r() * 170);
     if (roll < 0.24) o = { k: 'log', x, w: 26 + Math.floor(r() * 14), h: 24 };
-    else if (roll < 0.38) o = { k: 'rock', x, w: 50 + Math.floor(r() * 30), h: 56 };
+    else if (roll < 0.38) o = { k: 'rock', x, w: 34 + Math.floor(r() * 18), h: 40 };
     else if (roll < 0.52) { o = { k: 'ramp', x, w: 110 + Math.floor(r() * 50), h: 46 + Math.floor(r() * 24) }; gap = 190 + Math.floor(r() * 230); }   // drive up it and fly off the end
     else if (roll < 0.67) o = { k: 'ball', x, w: 36, hm: 85 + Math.floor(r() * 40), per: 1500 + Math.floor(r() * 900), ph: Math.floor(r() * 3000) };   // bouncing ball: jump over it or drive under it
     else if (roll < 0.83) o = { k: 'spike', x, w: 60 + Math.floor(r() * 40), h: 12 };                                                                   // spike trap: slowed for 3 s
@@ -662,6 +662,7 @@ function rcTick(room) {
     // 3. what is under the car: ground, the top of a log / rock, or the sloping surface of a ramp (taken at the car's centre)
     let G = 0;
     for (const o of solid) { if (o.x > c.x + RC.CAR) break; if (c.x + RC.CAR - 6 > o.x && c.x - RC.CAR + 6 < o.x + o.w && o.h > G) G = o.h; }
+    const Gsolid = G;                                                       // height contributed by logs / rocks (landing on these kills the engine)
     for (const o of R.ramps) { if (o.x > c.x) break; if (c.x < o.x + o.w) G = Math.max(G, o.h * (c.x - o.x) / o.w); }
     // 4. real vertical physics. On the ground the car follows the surface and remembers its upward speed (slope x speed); when the
     //    surface ends (the lip of a ramp) it keeps that speed and flies; in the air only gravity acts until it lands on whatever is below.
@@ -671,7 +672,10 @@ function rcTick(room) {
     }
     if (!c.grounded) {
       c.vy -= RC.G * dt; c.y += c.vy * dt;
-      if (c.y <= G && c.vy <= 0) { c.y = G; c.vy = 0; c.gvy = 0; c.grounded = true; }
+      if (c.y <= G && c.vy <= 0) {
+        c.y = G; c.vy = 0; c.gvy = 0; c.grounded = true;
+        if (Gsolid > 0 && Gsolid >= G - 0.01 && !c.done) { crash(c); c.stallUntil = now + RC.STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' }); }   // landed ON a log / rock: engine cuts out
+      }
     }
     if (c.grounded && engine && !c.done && now - c.jumpAt < 130) { c.vy = RC.JV + Math.max(0, c.gvy); c.y += 0.01; c.grounded = false; c.gvy = 0; c.jumpAt = -1e9; }   // jump (a press just before landing still counts); jumping off a ramp adds its speed
     if (!c.done) {
