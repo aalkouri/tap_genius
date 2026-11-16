@@ -586,12 +586,14 @@ const lev1 = (a, b) => {                                                        
 
 // ---------- RC Mayhem ----------
 // Every player drives an identical lane. The server runs all the physics (30 Hz) so the race is fair:
-//  - log (small): jump it, or it slows you      - rock (big): engine cuts out for a couple of seconds
+//  - log (small) and rock (big) are SOLID blocks: driving into one stops you dead at its face (log: you are slowed, rock: engine cuts out for
+//    a couple of seconds). Jump over, or jump ONTO the top and drive along it / off the end.
 //  - bridge / lift: rises and falls on a timer; driving into it while it is up cuts the engine and bumps you back
-const RC = { LEN: 3600, MAXV: 360, ACC: 520, DECEL: 240, BRAKE: 700, G: 1500, JV: 470, CAR: 20, TICK: 33,
+const RC = { LEN: 3600, MAXV: 360, ACC: 520, DECEL: 240, BRAKE: 700, G: 1500, JV: 520, CAR: 22, TICK: 33,
   STALL_MS: 2600, BRIDGE_STALL_MS: 2200, SLOW_MS: 900, AFTER_FIRST_MS: 15000, POINTS: [10, 7, 5, 4, 3, 2] };
 function mulberry(seed) { return () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 function makeTrack() {
+  if (process.env.RC_TRACK_JSON) return JSON.parse(process.env.RC_TRACK_JSON);   // tests only: a fixed track
   const r = mulberry(Math.floor(Math.random() * 1e9)), track = [];
   let x = 520;
   while (x < RC.LEN - 450) {
@@ -606,7 +608,7 @@ function makeTrack() {
 }
 const rcUp = (o, t) => (((t + o.ph) % o.per) + o.per) % o.per < o.up;      // bridge / lift is raised (blocking)
 function rcInit(room) {
-  room.rc.live = true; room.rc.finished = 0; room.rcLast = Date.now(); room.rcAllDone = false;
+  room.rc.solid = room.rc.track.filter((o) => o.k === 'log' || o.k === 'rock'); room.rc.live = true; room.rc.finished = 0; room.rcLast = Date.now(); room.rcAllDone = false;
   room.players.forEach((p) => { p.rc = { x: 0, y: 0, vy: 0, v: 0, go: false, jumpAt: -1e9, stallUntil: 0, slowUntil: 0, hit: new Set(), done: false, finT: 0, rank: 0 }; });
   room.tick = setInterval(() => rcTick(room), RC.TICK);
 }
@@ -624,21 +626,37 @@ function rcTick(room) {
       if (c.go) c.v = c.v > maxv ? Math.max(maxv, c.v - 900 * dt) : Math.min(maxv, c.v + RC.ACC * dt);
       else c.v = Math.max(0, c.v - RC.DECEL * dt);
     }
-    c.x += c.v * dt;
-    if (c.y > 0 || c.vy > 0) { c.vy -= RC.G * dt; c.y += c.vy * dt; if (c.y <= 0) { c.y = 0; c.vy = 0; } }
-    if (c.y === 0 && engine && !c.done && now - c.jumpAt < 130) { c.vy = RC.JV; c.y = 0.01; c.jumpAt = -1e9; }   // jump (a press just before landing still counts)
+    const prevX = c.x; c.x += c.v * dt;
+    const solid = room.rc.solid;
+    if (!c.done) for (const o of solid) {                                   // 1. side impacts: the car's body is below the top of the block
+      if (o.x > c.x + RC.CAR + 40) break;
+      if (o.x + o.w < c.x - RC.CAR - 40) continue;
+      if (c.x + RC.CAR > o.x && c.x - RC.CAR < o.x + o.w && c.y < o.h - 3) {
+        c.x = (prevX + RC.CAR <= o.x + 2 || c.x < o.x + o.w / 2) ? o.x - RC.CAR : o.x + o.w + RC.CAR;      // stopped at the face (never inside)
+        c.v = 0;
+        if (!c.hit.has(o.i)) {
+          c.hit.add(o.i);
+          if (o.k === 'log') { c.slowUntil = now + RC.SLOW_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'small' }); }
+          else { c.stallUntil = now + RC.STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' }); }
+        }
+      }
+    }
+    let gh = 0;                                                             // 2. what is under the car: the ground, or the top of a block
+    for (const o of solid) {
+      if (o.x > c.x + RC.CAR) break;
+      if (c.x + RC.CAR - 6 > o.x && c.x - RC.CAR + 6 < o.x + o.w && o.h > gh) gh = o.h;
+    }
+    if (c.y > gh + 0.001 || c.vy > 0) { c.vy -= RC.G * dt; c.y += c.vy * dt; if (c.y <= gh && c.vy <= 0) { c.y = gh; c.vy = 0; } }   // 3. fall / rise, landing on whatever is below
+    else { c.y = gh; c.vy = 0; }
+    c.air = c.y > gh + 0.001 || c.vy > 0;
+    if (!c.air && engine && !c.done && now - c.jumpAt < 130) { c.vy = RC.JV; c.y = gh + 0.01; c.air = true; c.jumpAt = -1e9; }   // jump (a press just before landing still counts)
     if (!c.done) {
-      const front = c.x + RC.CAR, back = c.x - RC.CAR;
+      const front = c.x + RC.CAR;
       for (const o of room.rc.track) {
         if (o.x > front + 40) break;
-        if (o.x + o.w < back) continue;
-        if (o.k === 'log' || o.k === 'rock') {
-          if (front > o.x && back < o.x + o.w && c.y < o.h && !c.hit.has(o.i)) {
-            c.hit.add(o.i);
-            if (o.k === 'log') { c.v *= 0.35; c.slowUntil = now + RC.SLOW_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'small' }); }
-            else { c.v = 0; c.stallUntil = now + RC.STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' }); }
-          }
-        } else if (prevFront <= o.x && front > o.x && rcUp(o, t)) {         // drove into a raised bridge / lift
+        if (o.x + o.w < c.x - RC.CAR) continue;
+        if (o.k === 'log' || o.k === 'rock') continue;
+        if (prevFront <= o.x && front > o.x && rcUp(o, t)) {         // drove into a raised bridge / lift
           c.x = o.x - RC.CAR - 4; c.v = 0; c.stallUntil = now + RC.BRIDGE_STALL_MS; emit(room, { ev: 'rchit', i: p.idx, k: 'big' });
         }
       }
@@ -648,7 +666,7 @@ function rcTick(room) {
         if (c.rank === 1) { clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), Math.min(Math.max(1000, g.ms - t), RC.AFTER_FIRST_MS)); }
       }
     }
-    cars.push([p.idx, Math.round(c.x), Math.round(c.y), Math.round(c.v), (c.y > 0 ? 1 : 0) | (now < c.stallUntil ? 2 : 0) | (now < c.slowUntil ? 4 : 0) | (c.done ? 8 : 0), Math.max(0, Math.round((c.stallUntil - now) / 100))]);
+    cars.push([p.idx, Math.round(c.x), Math.round(c.y), Math.round(c.v), (c.air ? 1 : 0) | (now < c.stallUntil ? 2 : 0) | (now < c.slowUntil ? 4 : 0) | (c.done ? 8 : 0), Math.max(0, Math.round((c.stallUntil - now) / 100))]);
   }
   emit(room, { ev: 'rc', t, c: cars });
   if (!room.rcAllDone && here(room).length && here(room).every((p) => p.rc && p.rc.done)) { room.rcAllDone = true; clearTimeout(room.timer); room.timer = setTimeout(() => endMini(room), 1800); }

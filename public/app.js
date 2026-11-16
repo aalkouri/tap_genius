@@ -1044,7 +1044,7 @@
           const c = cars.get(ev.i); if (!c) return;
           if (ev.i === myId) {
             if (ev.k === 'big') { Sfx.play('crash'); banner = { text: 'ENGINE OFF!', color: '#ff5a4f', until: performance.now() + 1100 }; app.classList.remove('shake'); void app.offsetWidth; app.classList.add('shake'); }
-            else Sfx.play('thunk');
+            else { Sfx.play('thunk'); banner = { text: 'BONK! Jump it!', color: '#ffd23f', until: performance.now() + 900 }; }
           }
         } else if (ev.ev === 'rcfinish') {
           const c = cars.get(ev.i); if (!c) return; c.rank = ev.rank;
