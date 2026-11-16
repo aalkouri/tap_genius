@@ -350,6 +350,7 @@
       case 'pig': b = `<path ${st} d="M20 36 L18 12 L40 24 Z M80 36 L82 12 L60 24 Z"/><circle ${st} cx="50" cy="54" r="38"/><ellipse ${ln} cx="50" cy="62" rx="15" ry="11"/><circle cx="44" cy="62" r="3" fill="${O}"/><circle cx="56" cy="62" r="3" fill="${O}"/><circle cx="34" cy="44" r="4" fill="${O}"/><circle cx="66" cy="44" r="4" fill="${O}"/>`; break;
       case 'acorn': b = `<path ${st} d="M22 44 Q22 90 50 94 Q78 90 78 44 Z"/><path ${st} d="M16 46 Q16 18 50 18 Q84 18 84 46 Z"/><path ${ln} d="M50 18 L50 6"/>`; break;
       case 'eggplant': b = `<path ${st} d="M62 22 Q94 42 72 72 Q50 98 26 84 Q8 66 34 44 Q50 32 62 22 Z"/><path ${st} d="M56 26 L74 10 L82 28 Z"/>`; break;
+      case 'frog': b = `<circle ${st} cx="28" cy="28" r="15"/><circle ${st} cx="72" cy="28" r="15"/><ellipse ${st} cx="50" cy="58" rx="42" ry="32"/><circle cx="28" cy="27" r="5" fill="${O}"/><circle cx="72" cy="27" r="5" fill="${O}"/><path ${ln} d="M26 62 Q50 82 74 62"/>`; break;
     }
     return `<svg viewBox="0 0 100 100" aria-hidden="true">${b}</svg>`;
   }
@@ -372,7 +373,7 @@
       phase = state || 'play'; ms = ev.ms; startAt = performance.now() - (ev.full === false ? 0 : 0) - (ms - remaining); answered = false; ans = {}; scores = ev.scores || scores;
       ask.innerHTML = `Round ${ev.r}/${ev.n} — tap the<br><b class="bbtarget" style="color:${BBHEX[ev.color]}">${esc(ev.color)} ${esc(ev.name)}</b>`;
       if (!state) Sfx.say(`Tap the ${ev.color} ${ev.name}`);
-      grid.innerHTML = ev.tiles.map((t, i) => `<button class="bbtile" data-i="${i}" ${phase === 'play' ? '' : 'disabled'}>${bbSvg(ev.obj, t.f, t.o)}<span class="bbw" style="color:${BBHEX[t.wc]};--sh:${t.wc === 'black' ? '#fff' : '#111'}">${esc(t.w.toUpperCase())}</span></button>`).join('');
+      grid.innerHTML = ev.tiles.map((t, i) => `<button class="bbtile" data-i="${i}" ${phase === 'play' ? '' : 'disabled'}>${bbSvg(t.ob || ev.obj, t.f, t.o)}<span class="bbw" style="color:${BBHEX[t.wc]};--sh:${t.wc === 'black' ? '#fff' : '#111'}">${esc(t.w.toUpperCase())}</span></button>`).join('');
       stat('Go!'); board();
     };
     grid.addEventListener('click', (e) => {

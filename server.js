@@ -69,7 +69,7 @@ function closeRoom(room, why) {
 // ---------- mini games (room.mode === 'mini'): countdown -> play -> standings, repeated ----------
 const MINI = {
   whack: { id: 'whack', name: 'Whack-a-Mole', icon: '🔨', how: 'Tap the head before anyone else does!', ms: 30000 },
-  bb:    { id: 'bb', name: 'Brain Bash', icon: '🧠', how: 'Tap the object the announcer asks for, like the purple pumpkin. Ignore the words under them! Faster picks score more.', ms: 95000, min: 1 },
+  bb:    { id: 'bb', name: 'Brain Bash', icon: '🧠', how: 'Tap the object the announcer asks for, like the purple pumpkin. Watch out for other things in the same colour, and ignore the words under them! Faster picks score more.', ms: 95000, min: 1 },
   ns:    { id: 'ns', name: 'Number Sniper', icon: '🎯', how: 'Read the number over a player when they stop moving, then type it to eliminate them. Never type your own!', ms: 75000, min: 2 },
   pf:    { id: 'pf', name: 'Pie Fight', icon: '🥧', how: 'Run around the edge, then throw pies at faces across the arena. Hit = +1, get hit = -1!', ms: 50000, min: 2 },
   bomb:  { id: 'bomb', name: 'Hot Potato', icon: '💣', how: 'Tap a player to throw them the bomb before it blows!', ms: 90000, min: 3 },
@@ -385,10 +385,10 @@ function miniCleanup(room) {          // stop any timers a mini game left runnin
 }
 
 // ---------- Brain Bash ----------
-// Each round the announcer names an object AND a colour ("the purple pumpkin"). Four copies of the object are shown, each a different single
-// colour with a differently coloured outline, so exactly one matches. Under every copy is a random colour WORD in a random colour: pure
-// distraction. Tap the right-coloured one; the faster you are, the more points. A wrong tap = X + buzzer and you are out of that round.
-const BB = { ROUNDS: 10, ROUND_MS: 6500, REVEAL_MS: 1800, COLORS: ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'brown'] };
+// Each round the announcer names an object AND a colour ("the purple pumpkin"). Six tiles are shown: the object in the right colour, copies of
+// it in other colours, and one or two DIFFERENT objects in the right colour (a green frog next to the green grapes), so exactly one tile
+// matches both. Every tile has a differently coloured outline and, underneath, a random colour WORD in a random colour: pure distraction. Tap the right-coloured one; the faster you are, the more points. A wrong tap = X + buzzer and you are out of that round.
+const BB = { ROUNDS: 10, TILES: 6, ROUND_MS: 6500, REVEAL_MS: 1800, COLORS: ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'brown'] };
 BB.OUTLINES = [...BB.COLORS, 'black', 'white']; BB.TEXTS = [...BB.COLORS, 'black'];
 BB.OBJECTS = [   // nat = its natural colour; avoid = other colours that would also be plausible (never used as the wrong answers)
   { id: 'banana', name: 'banana', nat: 'yellow', avoid: ['green', 'brown'] }, { id: 'carrot', name: 'carrot', nat: 'orange', avoid: ['purple'] },
@@ -399,6 +399,7 @@ BB.OBJECTS = [   // nat = its natural colour; avoid = other colours that would a
   { id: 'heart', name: 'heart', nat: 'red', avoid: ['pink', 'purple'] }, { id: 'fish', name: 'goldfish', nat: 'orange', avoid: ['yellow', 'red'] },
   { id: 'bear', name: 'teddy bear', nat: 'brown', avoid: ['pink', 'yellow', 'orange'] }, { id: 'pig', name: 'pig', nat: 'pink', avoid: ['red', 'brown'] },
   { id: 'acorn', name: 'acorn', nat: 'brown', avoid: ['green', 'orange'] }, { id: 'eggplant', name: 'eggplant', nat: 'purple', avoid: ['pink'] },
+  { id: 'frog', name: 'frog', nat: 'green', avoid: ['brown', 'yellow'] },
 ];
 const bbPick = (a) => a[Math.floor(Math.random() * a.length)];
 function bbInit(room) {
@@ -412,9 +413,13 @@ function bbRound(room) {
   let pool = BB.OBJECTS.filter((o) => !b.used.includes(o.id)); if (!pool.length) { b.used = []; pool = BB.OBJECTS; }
   const o = bbPick(pool); b.used.push(o.id); b.obj = o;
   const want = bbPick(BB.COLORS); b.want = want;                                                                // the announced colour: "the purple pumpkin" (any colour, not the natural one)
-  const fills = shuffle([want, ...shuffle(BB.COLORS.filter((c) => c !== want)).slice(0, 3)]);                    // four tiles, four DIFFERENT colours: exactly one is the target
-  b.correct = fills.indexOf(want);
-  b.tiles = fills.map((f) => ({ f, o: bbPick(BB.OUTLINES.filter((c) => c !== f && c !== want)), w: bbPick(BB.COLORS), wc: bbPick(BB.TEXTS) }));   // outline (never the target colour), colour WORD and its colour: all random decoys
+  // look-alikes: one or two OTHER objects in the announced colour, preferring ones that are naturally that colour (green grapes -> a green frog)
+  const others = shuffle(BB.OBJECTS.filter((x) => x.id !== o.id));
+  const alikes = [...others.filter((x) => x.nat === want), ...others.filter((x) => x.nat !== want)].slice(0, Math.random() < 0.35 ? 2 : 1);
+  const wrong = shuffle(BB.COLORS.filter((c) => c !== want)).slice(0, BB.TILES - 1 - alikes.length);            // the rest: the right object in wrong colours, all different
+  const tiles = shuffle([{ ob: o.id, f: want, hit: true }, ...alikes.map((x) => ({ ob: x.id, f: want })), ...wrong.map((f) => ({ ob: o.id, f }))]);
+  b.correct = tiles.findIndex((t) => t.hit);
+  b.tiles = tiles.map((t) => ({ ob: t.ob, f: t.f, o: bbPick(BB.OUTLINES.filter((c) => c !== t.f && c !== want)), w: bbPick(BB.COLORS), wc: bbPick(BB.TEXTS) }));   // outline (never the target colour), colour WORD and its colour: all random decoys
   room.players.forEach((p) => { p.bb = { ans: -1, pts: 0 }; });
   emit(room, { ev: 'bbround', r: b.round, n: BB.ROUNDS, obj: o.id, name: o.name, color: want, tiles: b.tiles, ms: BB.ROUND_MS, scores: bbScores(room) });
   clearTimeout(b.timer); b.timer = setTimeout(() => bbReveal(room), BB.ROUND_MS);
