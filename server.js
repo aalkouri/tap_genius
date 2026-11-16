@@ -58,7 +58,9 @@ function saveAvatar(dataUrl) {
   AVATARS.set(id, buf);
   return id;
 }
-function closeRoom(room) {
+function closeRoom(room, why) {
+  endGame(room, false);
+  logEvent('room_close', { room: room.rid, why, ms: Date.now() - room.created, games: room.games, peak: room.peak });
   clearTimeout(room.timer); clearTimeout(room.spawnTimer); clearInterval(room.tick); miniCleanup(room);
   room.avIds.forEach((id) => AVATARS.delete(id));
   rooms.delete(room.code);
@@ -85,6 +87,99 @@ const TOKENS = new Map();         // secret session token -> player, so a return
 const here = (room) => room.players.filter((p) => !p.away);
 const rooms = new Map(); // code -> room
 
+// ---------- activity log: anonymous events, one JSON line each, in <LOG_DIR>/events-YYYY-MM-DD.jsonl (UTC days) ----------
+// Never log nicknames, photos, guesses or IP addresses here: only room ids, counts and settings (see public/privacy.html).
+// deploy/ship-logs.sh copies the files to S3 and trims the instance's copy to 30 days. /stats shows the totals.
+const LOG_DIR = process.env.TG_LOG_DIR || '/var/log/tap-genius';
+let logOn = true; try { fs.mkdirSync(LOG_DIR, { recursive: true }); fs.accessSync(LOG_DIR, fs.constants.W_OK); } catch (e) { logOn = false; console.log('activity log is off:', e.message); }
+const dayOf = (t) => new Date(t).toISOString().slice(0, 10);
+const logFile = (day) => path.join(LOG_DIR, `events-${day}.jsonl`);
+const bump = (o, k, n = 1) => { o[k] = (o[k] || 0) + n; };
+const newAgg = () => ({ rooms: 0, players: 0, peak: 0, games: 0, finished: 0, playMs: 0, visits: 0, conns: 0, errors: 0, restarts: 0, modes: {}, minis: {}, cats: {}, bands: {}, errs: [] });
+function tally(a, e) {              // fold one event into a day's totals (used live and when reading a past day's file)
+  switch (e.e) {
+    case 'room_open': a.rooms++; a.players++; break;
+    case 'join': a.players++; break;
+    case 'game_start': a.games++; bump(a.modes, e.mode); if (e.band) bump(a.bands, e.band); (e.cats || []).forEach((c) => bump(a.cats, c)); break;
+    case 'round': bump(a.minis, e.game); break;
+    case 'game_end': if (e.done) a.finished++; a.playMs += e.ms || 0; break;
+    case 'snap': a.visits += e.visits || 0; a.conns += e.conns || 0; break;
+    case 'server_start': a.restarts++; break;
+    case 'error': case 'crash': a.errors++; a.errs.push({ t: e.t, what: e.e === 'crash' ? 'crash' : e.action, msg: e.msg }); if (a.errs.length > 10) a.errs.shift(); break;
+  }
+  if (e.on > a.peak) a.peak = e.on;
+}
+const AGG = new Map();   // day -> totals. Today's are kept up to date as events happen; past days are read from their file once.
+function aggFor(day) {
+  let a = AGG.get(day);
+  if (!a) { a = newAgg(); AGG.set(day, a); if (AGG.size > 60) AGG.delete([...AGG.keys()].sort()[0]); }
+  return a;
+}
+function readDay(a, txt) { for (const line of txt.split('\n')) { if (line) try { tally(a, JSON.parse(line)); } catch (e) { } } return a; }
+try { readDay(aggFor(dayOf(Date.now())), fs.readFileSync(logFile(dayOf(Date.now())), 'utf8')); } catch (e) { }   // today so far, from before this restart
+async function dayAgg(day) {
+  if (AGG.has(day) || day >= dayOf(Date.now())) return aggFor(day);
+  let txt = ''; try { txt = await fs.promises.readFile(logFile(day), 'utf8'); } catch (e) { }
+  return AGG.has(day) ? AGG.get(day) : readDay(aggFor(day), txt);
+}
+let logBuf = [];
+function logEvent(e, d) {
+  const now = Date.now(), day = dayOf(now), rec = { t: new Date(now).toISOString(), e, ...d };
+  tally(aggFor(day), rec);
+  if (logOn) logBuf.push([day, JSON.stringify(rec) + '\n']);
+}
+function flushLog(sync) {
+  if (!logBuf.length) return;
+  const by = {}; for (const [day, line] of logBuf) by[day] = (by[day] || '') + line; logBuf = [];
+  for (const day in by) {
+    if (sync) { try { fs.appendFileSync(logFile(day), by[day]); } catch (e) { } }
+    else fs.appendFile(logFile(day), by[day], (er) => { if (er) console.error('activity log write failed:', er.message); });
+  }
+}
+setInterval(flushLog, 2000);
+const online = () => { let n = 0; rooms.forEach((r) => { n += here(r).length; }); return n; };
+let visits = 0, conns = 0;   // page loads and new connections since the last snapshot
+function endGame(room, done) {     // a game finished (done) or was cut short (host went back to the lobby, or the room closed)
+  if (!room.gameStart) return;
+  logEvent('game_end', { room: room.rid, mode: room.mode, players: room.players.length, ms: Date.now() - room.gameStart, done });
+  room.gameStart = 0;
+}
+
+// ---------- /stats: totals for the owner, behind a password (HTTP Basic, any user name) ----------
+// The password is STATS_KEY, or the contents of /etc/tap-genius/stats.key (written by the deploy). With neither, the page does not exist.
+let STATS_KEY = process.env.STATS_KEY || ''; if (!STATS_KEY) try { STATS_KEY = fs.readFileSync('/etc/tap-genius/stats.key', 'utf8').trim(); } catch (e) { }
+const sha = (x) => crypto.createHash('sha256').update(x).digest();
+const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function statsAuthed(req) {
+  const m = /^Basic\s+(\S+)$/i.exec(req.headers.authorization || ''); if (!m) return false;
+  const up = Buffer.from(m[1], 'base64').toString('utf8'), pass = up.slice(up.indexOf(':') + 1);
+  return crypto.timingSafeEqual(sha(pass), sha(STATS_KEY));
+}
+async function statsPage() {
+  const DAYS = 14, days = []; for (let i = 0; i < DAYS; i++) days.push(dayOf(Date.now() - i * 864e5));
+  const aggs = await Promise.all(days.map(dayAgg));
+  const sum = {}; for (const k of ['modes', 'minis', 'cats', 'bands']) { sum[k] = {}; aggs.forEach((a) => Object.entries(a[k]).forEach(([id, n]) => bump(sum[k], id, n))); }
+  const mins = (ms) => Math.round(ms / 60000);
+  const rows = aggs.map((a, i) => `<tr><th>${days[i]}</th><td>${a.visits}</td><td>${a.rooms}</td><td>${a.players}</td><td>${a.peak}</td><td>${a.games}</td><td>${a.finished}</td><td>${mins(a.playMs)}</td><td>${a.errors}</td><td>${a.restarts}</td></tr>`).join('');
+  const list = (title, o, label) => `<h2>${title}</h2>` + (Object.keys(o).length ? '<table>' + Object.entries(o).sort((x, y) => y[1] - x[1]).map(([id, n]) => `<tr><th>${esc(label ? label(id) : id)}</th><td>${n}</td></tr>`).join('') + '</table>' : '<p>Nothing yet.</p>');
+  const errs = aggs.flatMap((a) => a.errs).sort((x, y) => (x.t < y.t ? 1 : -1)).slice(0, 20);
+  let inGame = 0; rooms.forEach((r) => { if (r.state !== 'lobby' && r.state !== 'done') inGame++; });
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Tap Genius stats</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;max-width:900px;margin:0 auto;padding:20px 16px 60px;color:#1a2233;background:#fff}h1,h2{color:#032A6B}h2{margin-top:1.6em}
+table{border-collapse:collapse}th,td{padding:4px 12px;border-bottom:1px solid #dde3ee;text-align:right;white-space:nowrap}th:first-child{text-align:left}.wide{overflow-x:auto}
+.now{display:flex;gap:12px;flex-wrap:wrap}.now div{background:#eef3fb;border-radius:10px;padding:10px 16px}.now b{display:block;font-size:26px;color:#032A6B}small{color:#5b6577}</style></head><body>
+<h1>Tap Genius stats</h1>
+<h2>Right now</h2><div class="now"><div><b>${online()}</b>players</div><div><b>${rooms.size}</b>rooms open</div><div><b>${inGame}</b>games running</div><div><b>${wss.clients.size}</b>connections</div></div>
+<h2>Last ${DAYS} days</h2><div class="wide"><table><tr><th>Day (UTC)</th><th>Visits</th><th>Rooms</th><th>Players</th><th>Peak online</th><th>Games</th><th>Finished</th><th>Minutes played</th><th>Errors</th><th>Restarts</th></tr>${rows}</table></div>
+<p><small>Visits = loads of the home page. Players = seats taken (the same person in two rooms counts twice). Minutes played = total game time across rooms. ${logOn ? '' : '<b>The log directory is not writable, so these totals are lost on restart.</b>'}</small></p>
+${list('Game type', sum.modes, (id) => (id === 'mini' ? 'Mini Games' : 'Trivia'))}
+${list('Mini game rounds played', sum.minis, (id) => (MINI[id] ? MINI[id].name : id))}
+${list('Trivia categories picked', sum.cats, (id) => (CATS.find((c) => c.id === id) || { name: id }).name)}
+${list('Trivia age ranges', sum.bands, (id) => BAND_LABEL[id] || id)}
+<h2>Recent errors</h2>${errs.length ? '<div class="wide"><table>' + errs.map((x) => `<tr><th>${esc(x.t)}</th><td>${esc(x.what)}</td><td style="text-align:left;white-space:normal">${esc(x.msg)}</td></tr>`).join('') + '</table></div>' : '<p>None.</p>'}
+</body></html>`;
+}
+
 const srv = http.createServer((req, res) => {
   if (req.url === '/healthz') { res.writeHead(200); return res.end('ok'); }
   let p; try { p = decodeURIComponent(req.url.split('?')[0]); } catch (e) { res.writeHead(400); return res.end(); }
@@ -95,7 +190,14 @@ const srv = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400' });
     return res.end(buf);
   }
+  if (p === '/stats') {
+    if (!STATS_KEY) { res.writeHead(404); return res.end('Not found'); }
+    if (!statsAuthed(req)) { res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Tap Genius stats", charset="UTF-8"', 'Cache-Control': 'no-store' }); return res.end('Password needed'); }
+    return statsPage().then((html) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(html); },
+      (e) => { console.error('stats failed:', e.message); res.writeHead(500); res.end(); });
+  }
   if (p === '/') p = '/index.html';
+  if (p === '/index.html') visits++;
   const f = path.join(PUB, path.normalize(p));
   if (!f.startsWith(PUB + path.sep)) { res.writeHead(403); return res.end(); }
   fs.stat(f, (e, st) => {
@@ -737,6 +839,7 @@ function spawnMoles(room) {
 function endMini(room) {
   if (room.state !== 'play') return;
   clearTimeout(room.spawnTimer); clearInterval(room.tick); room.tick = null;
+  logEvent('round', { room: room.rid, game: room.order[room.qIndex], players: here(room).length, ms: Date.now() - room.playStart });
   if (room.rc && room.rc.live) rcAward(room);
   if (room.pic) room.pic.live = false;
   if (room.bomb) bombAward(room);
@@ -755,7 +858,7 @@ function checkAllReady(room) {
 function advance(room) {
   if (room.state !== 'standings') return;
   clearTimeout(room.timer);
-  if (room.isLast) { room.state = 'done'; return broadcast(room); }
+  if (room.isLast) { room.state = 'done'; endGame(room, true); return broadcast(room); }
   room.qIndex++;
   if (room.mode === 'mini') startMini(room); else startQuestion(room);
 }
@@ -772,29 +875,31 @@ function settle(room) {
   if (checkAllReady(room)) return;
   broadcast(room);
 }
-function dropPlayer(room, p) {       // remove a player for good (they left, or were away too long)
+function dropPlayer(room, p, why) {       // remove a player for good (they left, or were away too long)
   clearTimeout(p.awayTimer); clearTimeout(p.hostTimer); clearTimeout(p.drawerTimer);
   TOKENS.delete(p.token);
   if (p.ws && p.ws.player === p) { p.ws.room = null; p.ws.player = null; }
   room.players = room.players.filter((x) => x !== p);
-  if (!room.players.length) { closeRoom(room); listChanged(); return; }
+  logEvent('leave', { room: room.rid, n: room.players.length, why: why || 'away_too_long' });
+  if (!room.players.length) { closeRoom(room, 'empty'); listChanged(); return; }
   if (room.bomb && room.state === 'play') bombLeft(room, p);
   if (room.copy && room.copy.alive.delete(p)) room.copy.roundOut.push(p);
   if (room.host === p) room.host = here(room)[0] || room.players[0];
   settle(room);
 }
 // The host is gone: send everyone back to the main screen and close the game.
-function hostGone(room, msg) {
+function hostGone(room, msg, why) {
   const ps = room.players.slice();
   ps.forEach((p) => { clearTimeout(p.awayTimer); clearTimeout(p.hostTimer); clearTimeout(p.drawerTimer); TOKENS.delete(p.token); send(p.ws, { type: 'left', msg }); if (p.ws && p.ws.player === p) { p.ws.room = null; p.ws.player = null; } });
-  closeRoom(room); listChanged();
+  closeRoom(room, why); listChanged();
 }
 // The connection dropped (phone locked, app switched, signal lost). Keep their seat so they can come straight back.
 function goAway(ws) {
   const room = ws.room, p = ws.player; if (!room || !p || p.ws !== ws) return;
   p.away = true; if (p.rc) p.rc.go = false;
+  logEvent('away', { room: room.rid, state: room.state });
   clearTimeout(p.awayTimer); p.awayTimer = setTimeout(() => { if (p.away) dropPlayer(room, p); }, GRACE_MS);
-  if (room.host === p) p.hostTimer = setTimeout(() => { if (p.away && room.host === p && rooms.get(room.code) === room) hostGone(room, 'The host disconnected, so the game ended.'); }, HOST_GRACE_MS);   // host gone more than a few seconds: end the game for everyone
+  if (room.host === p) p.hostTimer = setTimeout(() => { if (p.away && room.host === p && rooms.get(room.code) === room) hostGone(room, 'The host disconnected, so the game ended.', 'host_disconnected'); }, HOST_GRACE_MS);   // host gone more than a few seconds: end the game for everyone
   if (room.pic && room.pic.live && room.pic.drawer === p) p.drawerTimer = setTimeout(() => { if (p.away && room.state === 'play' && room.pic && room.pic.live && room.pic.drawer === p) endMini(room); }, 12000);
   settle(room);
 }
@@ -813,10 +918,11 @@ const ACTIONS = {
     if (ws.room) return;
     if (rooms.size >= 500) return err(ws, 'Server busy, try again soon');
     const av = saveAvatar(m.avatar); if (!av) return err(ws, 'Take your picture first');
-    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], miniGames: [], miniRounds: 0, ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av] };
+    const room = { code: newCode(), state: 'lobby', players: [], qIndex: -1, order: [], last: Date.now(), band: '6-10', cats: [], miniGames: [], miniRounds: 0, ms: QUESTION_MS['6-10'], mode: m.mode === 'mini' ? 'mini' : 'trivia', created: Date.now(), avIds: [av], rid: crypto.randomBytes(5).toString('hex'), games: 0, peak: 1, gameStart: 0 };
     const p = { ws, name, av, room, score: 0, prev: 0, choice: null, gained: 0, token: crypto.randomBytes(12).toString('hex') };
     TOKENS.set(p.token, p);
     room.players.push(p); room.host = p; ws.room = room; ws.player = p; rooms.set(room.code, room); browsers.delete(ws);
+    logEvent('room_open', { room: room.rid, mode: room.mode, on: online() });
     send(ws, { type: 'session', token: p.token });
     broadcast(room);
   },
@@ -833,6 +939,8 @@ const ACTIONS = {
     const p = { ws, name, av, room, score: 0, prev: 0, choice: null, gained: 0, token: crypto.randomBytes(12).toString('hex') };
     TOKENS.set(p.token, p);
     room.players.push(p); ws.room = room; ws.player = p; browsers.delete(ws);
+    room.peak = Math.max(room.peak, room.players.length);
+    logEvent('join', { room: room.rid, n: room.players.length, on: online() });
     send(ws, { type: 'session', token: p.token });
     broadcast(room);
   },
@@ -844,14 +952,15 @@ const ACTIONS = {
     ws.room = room; ws.player = p; p.ws = ws; p.away = false;
     clearTimeout(p.awayTimer); clearTimeout(p.hostTimer); clearTimeout(p.drawerTimer);
     browsers.delete(ws); room.last = Date.now();
+    logEvent('back', { room: room.rid });
     send(ws, { type: 'session', token: p.token });
     broadcast(room); resync(room, p);
   },
   ping(ws) { send(ws, { type: 'pong' }); },     // lets a phone that just woke up check that its connection is really alive
   leave(ws) {    // the player chose to leave: free their seat straight away
     const room = ws.room, p = ws.player; if (!room || !p) return;
-    if (room.host === p) return hostGone(room, 'The host ended the game.');
-    dropPlayer(room, p); send(ws, { type: 'left' });
+    if (room.host === p) return hostGone(room, 'The host ended the game.', 'host_left');
+    dropPlayer(room, p, 'left'); send(ws, { type: 'left' });
   },
   list(ws) {     // start watching the list of open games
     if (ws.room) return;
@@ -879,12 +988,16 @@ const ACTIONS = {
       const eligible = forced ? [forced] : room.miniGames.filter((id) => MINI[id] && (MINI[id].min || 1) <= here(room).length);
       if (!eligible.length) return err(ws, room.miniGames.length ? 'Not enough players for the games you picked' : 'Pick at least one game');
       room.order = buildMiniOrder(eligible, room.miniRounds || (forced ? 3 : eligible.length));
+      room.games++; room.gameStart = Date.now();
+      logEvent('game_start', { room: room.rid, mode: 'mini', players: here(room).length, games: eligible, rounds: room.order.length });
       room.qIndex = 0; return startMini(room);
     }
     room.ms = QUESTION_MS[room.band];
     const qs = pickQuestions(room.band, room.cats, ROUNDS);
     if (!qs.length) return err(ws, 'Pick at least one category that has questions for this age range');
     room.order = qs.map((q) => q.id);
+    room.games++; room.gameStart = Date.now();
+    logEvent('game_start', { room: room.rid, mode: 'trivia', players: here(room).length, band: room.band, cats: room.cats, rounds: room.order.length });
     room.qIndex = 0; startQuestion(room);
   },
   answer(ws, m) {
@@ -1022,6 +1135,7 @@ const ACTIONS = {
   tolobby(ws) {   // host aborts whatever is running (any screen) and takes everyone back to the lobby with scores reset
     const room = hostRoom(ws); if (!room || room.state === 'lobby') return;
     clearTimeout(room.timer); clearTimeout(room.spawnTimer); clearInterval(room.tick); miniCleanup(room);
+    endGame(room, false);
     room.state = 'lobby'; room.qIndex = -1; room.players.forEach((p) => { p.score = 0; p.prev = 0; p.choice = null; p.gained = 0; });
     broadcast(room);
   },
@@ -1030,18 +1144,29 @@ const err = (ws, message) => send(ws, { type: 'error', message });
 const hostRoom = (ws) => (ws.room && ws.room.host === ws.player ? ws.room : null);
 
 wss.on('connection', (ws) => {
-  ws.isAlive = true; ws.on('pong', () => (ws.isAlive = true));
+  ws.isAlive = true; ws.on('pong', () => (ws.isAlive = true)); conns++;
   ws.on('message', (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     const fn = Object.hasOwn(ACTIONS, m.action) && ACTIONS[m.action];
-    if (fn) { if (ws.room) ws.room.last = Date.now(); try { fn(ws, m); } catch (e) { console.error('action failed:', m.action, e.message); } }
+    if (fn) { if (ws.room) ws.room.last = Date.now(); try { fn(ws, m); } catch (e) { console.error('action failed:', m.action, e.message); logEvent('error', { action: m.action, msg: String(e.message).slice(0, 300) }); } }
   });
   ws.on('close', () => { browsers.delete(ws); goAway(ws); });
 });
 // Heartbeat (CloudFront drops idle sockets) + idle room cleanup
 setInterval(() => {
   wss.clients.forEach((ws) => { if (!ws.isAlive) return ws.terminate(); ws.isAlive = false; ws.ping(); });
-  rooms.forEach((r) => { if (Date.now() - r.last > ROOM_IDLE_MS) { r.players.forEach((p) => { clearTimeout(p.awayTimer); TOKENS.delete(p.token); send(p.ws, { type: 'left' }); if (p.ws.player === p) { p.ws.room = null; p.ws.player = null; } }); closeRoom(r); listChanged(); } });
+  rooms.forEach((r) => { if (Date.now() - r.last > ROOM_IDLE_MS) { r.players.forEach((p) => { clearTimeout(p.awayTimer); TOKENS.delete(p.token); send(p.ws, { type: 'left' }); if (p.ws.player === p) { p.ws.room = null; p.ws.player = null; } }); closeRoom(r, 'idle'); listChanged(); } });
 }, 30000);
 
-srv.listen(PORT, () => console.log('Tap Genius listening on', PORT));
+// Every 5 minutes: how busy the server is (also shows it was up), plus page loads and new connections since the last one
+setInterval(() => snap(), 5 * 60000);
+const snap = () => { logEvent('snap', { rooms: rooms.size, on: online(), sockets: wss.clients.size, visits, conns }); visits = 0; conns = 0; };
+function shutdown(why) { snap(); logEvent('server_stop', { why, rooms: rooms.size, players: online() }); flushLog(true); process.exit(0); }
+process.on('SIGTERM', () => shutdown('sigterm')); process.on('SIGINT', () => shutdown('sigint'));
+process.on('uncaughtException', (e) => {      // still fatal (systemd restarts the server), but leave a record of what happened
+  console.error(e);
+  try { logEvent('crash', { msg: String(e && e.message).slice(0, 300), stack: String(e && e.stack).split('\n').slice(1, 6).map((l) => l.trim()) }); flushLog(true); } catch (e2) { }
+  process.exit(1);
+});
+
+srv.listen(PORT, () => { console.log('Tap Genius listening on', PORT); logEvent('server_start', {}); });

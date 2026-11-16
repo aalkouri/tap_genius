@@ -1,6 +1,7 @@
 name: Deploy to game server
 # Pushing to main (or a claude/* branch) deploys that exact commit to the EC2 game server.
-# Auth is keyless (GitHub OIDC -> a narrow AWS role); no secrets are stored in GitHub.
+# Auth is keyless (GitHub OIDC -> a narrow AWS role); no AWS secrets are stored in GitHub.
+# Optional repository secret STATS_KEY = the password for https://tap.alkouri.com/stats (without it the page stays switched off).
 on:
   push:
     branches: [main, 'claude/**']
@@ -39,8 +40,10 @@ jobs:
       - name: Deploy over SSM
         env:
           GH_TOKEN: ${{ github.token }}   # short-lived, read-only; lets the instance fetch this private repo
+          STATS_KEY: ${{ secrets.STATS_KEY }}
         run: |
           SHA="${GITHUB_SHA}"
+          STATS_KEY_B64=$(printf %s "${STATS_KEY}" | base64 -w0)   # base64 so any characters survive the trip through the shell
           cat > cmd.sh <<EOF
           set -euo pipefail
           W=\$(mktemp -d); trap 'cd /; rm -rf "\$W"' EXIT   # /tmp is a small tmpfs: never leave the tarball behind
@@ -53,6 +56,12 @@ jobs:
           rm -rf /opt/tap-genius/public /opt/tap-genius/questions
           cp -r ${FILES} /opt/tap-genius/
           (cd /opt/tap-genius && (npm ci --omit=dev || npm install --omit=dev))
+          # activity log: its directory, the /stats password, and the hourly copy to S3 (deploy/ship-logs.sh)
+          mkdir -p /var/log/tap-genius /etc/tap-genius
+          if [ -n "${STATS_KEY_B64}" ]; then (umask 077; echo "${STATS_KEY_B64}" | base64 -d > /etc/tap-genius/stats.key); fi
+          (install -m 755 deploy/ship-logs.sh /usr/local/bin/tap-genius-ship-logs
+           install -m 644 deploy/tap-genius-logs.service deploy/tap-genius-logs.timer /etc/systemd/system/
+           systemctl daemon-reload && systemctl enable --now tap-genius-logs.timer) || echo "WARNING: could not set up the hourly log copy (the game itself is unaffected)"
           systemctl restart tap-genius
           sleep 4
           if systemctl is-active --quiet tap-genius && curl -fsS http://localhost:8081/healthz >/dev/null; then

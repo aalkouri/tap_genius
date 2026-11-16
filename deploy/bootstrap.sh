@@ -42,3 +42,12 @@ cat > /tmp/tg-cf.json <<CF
 CF
 aws cloudfront create-distribution --distribution-config file:///tmp/tg-cf.json --query Distribution.DomainName --output text
 # Then add CNAME: tap.alkouri.com -> <that cloudfront domain>
+
+# 6. Activity log bucket (private) + permission for the instance to write to it. deploy/ship-logs.sh uploads there hourly.
+B=tap-genius-logs-$ACCT
+aws s3api create-bucket --bucket "$B" --region $R --create-bucket-configuration LocationConstraint=$R
+aws s3api put-public-access-block --bucket "$B" --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+PROFILE=$(aws ec2 describe-instances --region $R --instance-ids $IID --query 'Reservations[0].Instances[0].IamInstanceProfile.Arn' --output text | sed 's|.*/||')
+ROLE=$(aws iam get-instance-profile --instance-profile-name "$PROFILE" --query 'InstanceProfile.Roles[0].RoleName' --output text)
+aws iam put-role-policy --role-name "$ROLE" --policy-name tap-genius-log-upload --policy-document \
+  "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:PutObject\",\"Resource\":\"arn:aws:s3:::$B/events/*\"}]}"
