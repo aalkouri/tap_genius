@@ -19,3 +19,5 @@ android/app/src/main/assets/capacitor.plugins.json
 android/app/release/
 *.keystore
 *.jks
+.env
+.env.*
